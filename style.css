@@ -1,0 +1,105 @@
+/* Nút mặc định (toàn app) */
+.stButton > button {
+    border-radius: 8px;
+    background: #4F8BF9;
+    color: white;
+    border: none;
+    padding: 8px 18px;
+    font-size: 1em;
+    font-weight: 500;
+    margin: 2px 0;
+    transition: background 0.2s;
+}
+.stButton > button:hover {
+    background: #3566c7;
+    color: #fff;
+}
+
+/* --- Chat Area Styling --- */
+
+/* 
+Streamlit's main content area usually has a class like 'main' or is a direct child
+ identifiable from the root. Let's assume the main content block containing our chat 
+ is identifiable or we apply this to a general div within the main block.
+ The sidebar interactivity is the trickiest part with pure CSS for fixed elements.
+*/
+
+.chat-history-area {
+    padding-bottom: 80px; /* Đảm bảo có không gian cho thanh input cố định */
+}
+
+.fixed-chat-input-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%; 
+    background-color: #f0f2f6;
+    padding: 10px 15px; /* padding trên, dưới, phải */
+    /* padding-left cố định, đủ nhỏ để không quá lệch khi sidebar đóng */
+    /* Khi sidebar mở, phần này có thể bị sidebar che */
+    padding-left: 20px; 
+    border-top: 1px solid #e0e0e0;
+    z-index: 100; 
+    box-shadow: 0 -2px 5px rgba(0,0,0,0.05);
+    box-sizing: border-box; 
+}
+
+/* Nút gửi (tròn, xanh) trong thanh input */
+.fixed-chat-input-bar button[data-testid="baseButton-send_btn_chat"] {
+    border-radius: 50% !important;
+    width: 42px !important; 
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+    max-width: 42px !important;
+    max-height: 42px !important;
+    padding: 0 !important;
+    font-size: 1.3em !important; 
+    margin: 0 auto !important;
+    background: #4F8BF9 !important;
+    color: #fff !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fixed-chat-input-bar button[data-testid="baseButton-send_btn_chat"]:hover {
+    background: #3566c7 !important;
+}
+
+/* Nút dừng (tròn, đỏ) trong thanh input */
+.fixed-chat-input-bar button[data-testid="baseButton-stop_btn_chat"] {
+    border-radius: 50% !important;
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+    max-width: 42px !important;
+    max-height: 42px !important;
+    padding: 0 !important;
+    font-size: 1.3em !important;
+    margin: 0 auto !important;
+    background: #e74c3c !important;
+    color: #fff !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fixed-chat-input-bar button[data-testid="baseButton-stop_btn_chat"]:hover {
+    background: #c0392b !important;
+}
+
+/* Sidebar buttons: border, transparent background, no blue, only in sidebar */
+section[data-testid="stSidebar"] .stButton > button {
+    background: transparent !important;
+    color: #222 !important;
+    border: 2px solid #4F8BF9 !important;
+    box-shadow: none !important;
+    font-weight: 500;
+    transition: border 0.2s, color 0.2s, background 0.2s;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    border: 2.5px solid #3566c7 !important;
+    color: #3566c7 !important;
+    background: rgba(79,139,249,0.07) !important;
+} 
