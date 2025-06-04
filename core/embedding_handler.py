@@ -29,10 +29,9 @@ def generate_session_id(file_names):
 # Lưu ý: _documents và _embedding_model_name giờ đây nên được thay thế bằng một ID định danh cho bộ tài liệu đó
 # Tuy nhiên, vì chúng ta sẽ lưu và tải vector store, việc cache get_vector_store có thể không còn quá quan trọng
 # nếu việc tải từ disk đủ nhanh. Hiện tại vẫn giữ cache cho việc tạo mới.
-@st.cache_resource(show_spinner="Đang tạo cơ sở tri thức từ tài liệu...")
 def create_vector_store_from_documents(_documents, _embedding_model_instance):
     """Tạo FAISS vector store từ các document đã chia chunk."""
-    print("[embedding_handler] Bắt đầu tạo vector store từ documents...")
+    print("[embedding_handler] Bắt đầu tạo vector store từ documents (không cache resource)...")
     if _documents and _embedding_model_instance:
         try:
             vector_store_instance = FAISS.from_documents(_documents, _embedding_model_instance)
