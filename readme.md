@@ -1,5 +1,7 @@
 # Vietnamese RAG Chatbot
 
+Hệ thống RAG (Retrieval Augmented Generation) nâng cao cho tài liệu Tiếng Việt sử dụng Llama 3, LangChain và Streamlit.
+
 Dự án này là thành quả của nhóm trong bài tập lớn môn Deep Learning (2425II_AIT3001*_1). Nhóm xin gửi lời cảm ơn chân thành đến thầy Triệu Hải Long đã tận tình hướng dẫn, đồng hành với chúng em trong suốt quá trình thực hiện dự án.
 
 Thành viên nhóm:
@@ -9,9 +11,6 @@ Lê Vũ Hiếu - 23020365
 Đàm Lê Minh Quân - 23020416
 
 Nguyễn Hoàng Tú - 23020428
-
-
-Hệ thống RAG (Retrieval Augmented Generation) nâng cao cho tài liệu Tiếng Việt sử dụng Llama 3, LangChain và Streamlit.
 
 ## Giới thiệu về RAG
 
