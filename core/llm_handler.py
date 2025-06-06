@@ -97,11 +97,23 @@ Câu trả lời hữu ích:"""
             template=prompt_template_str, input_variables=["context", "question"]
         )
         
+        # Tăng k cho retriever để đảm bảo luôn có kết quả
+        if hasattr(retriever, 'search_kwargs'):
+            # Đảm bảo k đủ lớn
+            retriever.search_kwargs["k"] = max(retriever.search_kwargs.get("k", 5), 8)
+            # Giảm score_threshold nếu có
+            if "score_threshold" in retriever.search_kwargs:
+                retriever.search_kwargs["score_threshold"] = min(retriever.search_kwargs["score_threshold"], 0.5)
+        
         # Thêm reranking nếu COHERE_API_KEY được cung cấp
         reranker = get_reranker()
         if reranker:
             print("[llm_handler] Sử dụng Cohere Reranker để cải thiện kết quả...")
             try:
+                # Đảm bảo top_n đủ lớn để có kết quả
+                if hasattr(reranker, 'top_n'):
+                    reranker.top_n = max(reranker.top_n, 5)  # Đảm bảo ít nhất 5 kết quả
+                
                 compression_retriever = ContextualCompressionRetriever(
                     base_compressor=reranker,
                     base_retriever=retriever
@@ -110,6 +122,31 @@ Câu trả lời hữu ích:"""
             except Exception as e:
                 print(f"[llm_handler] Lỗi khi khởi tạo contextual compression: {e}")
                 # Giữ nguyên retriever nếu lỗi
+        
+        # Custom retriever wrapper để đảm bảo luôn có kết quả
+        original_retriever = retriever
+        
+        # Ghi đè phương thức get_relevant_documents để đảm bảo luôn có kết quả
+        def get_relevant_documents_wrapper(query):
+            print(f"[llm_handler] Tìm kiếm kết quả cho query: {query}")
+            docs = original_retriever.get_relevant_documents(query)
+            print(f"[llm_handler] Tìm thấy {len(docs)} kết quả")
+            
+            # Nếu không có kết quả, thử tìm kiếm với k lớn hơn
+            if not docs:
+                print("[llm_handler] Không tìm thấy kết quả, thử tìm với k=10...")
+                if hasattr(original_retriever, 'search_kwargs') and 'k' in original_retriever.search_kwargs:
+                    original_k = original_retriever.search_kwargs['k']
+                    original_retriever.search_kwargs['k'] = 10
+                    docs = original_retriever.get_relevant_documents(query)
+                    original_retriever.search_kwargs['k'] = original_k
+            
+            # Debug các kết quả tìm được
+            print(f"[llm_handler] Kết quả sau khi retry: {len(docs)} documents")
+            return docs
+        
+        # Gán phương thức mới cho retriever
+        retriever.get_relevant_documents = get_relevant_documents_wrapper
         
         # Khởi tạo chain tiêu chuẩn
         qa_chain = RetrievalQA.from_chain_type(

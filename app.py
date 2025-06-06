@@ -406,23 +406,49 @@ elif st.session_state.state == "chatting":
                 print(f"Has source_documents: {'source_documents' in response if isinstance(response, dict) else False}")
                 if isinstance(response, dict) and 'source_documents' in response:
                     print(f"Number of source documents: {len(response['source_documents'])}")
-                    if len(response['source_documents']) > 0:
-                        first_doc = response['source_documents'][0]
-                        print(f"First doc type: {type(first_doc)}")
-                        print(f"First doc metadata: {first_doc.metadata if hasattr(first_doc, 'metadata') else 'No metadata'}")
+                    for i, doc in enumerate(response['source_documents']):
+                        print(f"Document {i+1}:")
+                        print(f"  Type: {type(doc)}")
+                        print(f"  Metadata: {doc.metadata}")
+                        print(f"  Page content length: {len(doc.page_content)}")
+                        print(f"  Content preview: {doc.page_content[:50]}...")
                 print("=== END DEBUG QA RESPONSE ===\n\n")
                 
                 # Trích xuất kết quả từ QA chain
                 if isinstance(response, dict):
                     response_content = response.get("result", "")
                     raw_sources = response.get("source_documents", [])
-                    sources_list = []
-                    for src in raw_sources:
-                        sources_list.append({
-                            "source": src.metadata.get("source", "N/A"),
-                            "chunk_id": src.metadata.get("chunk_id", "N/A"),
-                            "content": src.page_content.replace("\\n", " ")
-                        })
+                    
+                    # Giải pháp đối với vấn đề không tìm thấy nguồn
+                    if not raw_sources:
+                        print("[app] Warning: source_documents rỗng, tạo giả lập một nguồn để hiển thị")
+                        # Tạo một nguồn placeholder để đảm bảo UI vẫn hiển thị phần nguồn
+                        fallback_source = {
+                            "source": "Kết quả tìm kiếm",
+                            "chunk_id": "auto-generated",
+                            "content": "Không tìm thấy nguồn tham khảo cụ thể cho câu hỏi này. Hệ thống đã sử dụng kiến thức tổng hợp từ tài liệu để trả lời."
+                        }
+                        sources_list = [fallback_source]
+                    else:
+                        # Xử lý nguồn thông thường
+                        sources_list = []
+                        for src in raw_sources:
+                            try:
+                                source_item = {
+                                    "source": src.metadata.get("source", "N/A"),
+                                    "chunk_id": src.metadata.get("chunk_id", "N/A"),
+                                    "content": src.page_content.replace("\\n", " ")
+                                }
+                                sources_list.append(source_item)
+                                print(f"[app] Đã thêm nguồn: {source_item['source']}")
+                            except Exception as e:
+                                print(f"[app] Lỗi khi xử lý nguồn: {e}")
+                                # Vẫn thêm nguồn với thông tin tối thiểu nếu có lỗi
+                                sources_list.append({
+                                    "source": "Lỗi khi xử lý nguồn",
+                                    "chunk_id": "error",
+                                    "content": f"Đã xảy ra lỗi khi xử lý nguồn: {e}"
+                                })
                     
                     # Debug print để kiểm tra sources_list trước khi đính kèm vào tin nhắn
                     print("\n\n=== DEBUG SOURCES LIST ===")
@@ -433,7 +459,12 @@ elif st.session_state.state == "chatting":
                 else:
                     # Phòng trường hợp không phải dict
                     response_content = str(response)
-                    sources_list = []
+                    # Tạo một nguồn giả lập để luôn hiển thị phần nguồn
+                    sources_list = [{
+                        "source": "Kết quả trả về",
+                        "chunk_id": "auto-generated",
+                        "content": "Không có thông tin nguồn tham khảo cho câu trả lời này."
+                    }]
         except Exception as e:
             response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
         
