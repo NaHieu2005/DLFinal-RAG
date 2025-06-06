@@ -105,6 +105,9 @@ Câu trả lời hữu ích:"""
             if "score_threshold" in retriever.search_kwargs:
                 retriever.search_kwargs["score_threshold"] = min(retriever.search_kwargs["score_threshold"], 0.5)
         
+        # LƯU Ý: KHÔNG sử dụng Cohere reranker vì gây ra lỗi
+        # Bỏ đoạn sau để tránh lỗi
+        """
         # Thêm reranking nếu COHERE_API_KEY được cung cấp
         reranker = get_reranker()
         if reranker:
@@ -122,31 +125,15 @@ Câu trả lời hữu ích:"""
             except Exception as e:
                 print(f"[llm_handler] Lỗi khi khởi tạo contextual compression: {e}")
                 # Giữ nguyên retriever nếu lỗi
+        """
         
-        # Custom retriever wrapper để đảm bảo luôn có kết quả
-        original_retriever = retriever
-        
-        # Ghi đè phương thức get_relevant_documents để đảm bảo luôn có kết quả
-        def get_relevant_documents_wrapper(query):
-            print(f"[llm_handler] Tìm kiếm kết quả cho query: {query}")
-            docs = original_retriever.get_relevant_documents(query)
-            print(f"[llm_handler] Tìm thấy {len(docs)} kết quả")
-            
-            # Nếu không có kết quả, thử tìm kiếm với k lớn hơn
-            if not docs:
-                print("[llm_handler] Không tìm thấy kết quả, thử tìm với k=10...")
-                if hasattr(original_retriever, 'search_kwargs') and 'k' in original_retriever.search_kwargs:
-                    original_k = original_retriever.search_kwargs['k']
-                    original_retriever.search_kwargs['k'] = 10
-                    docs = original_retriever.get_relevant_documents(query)
-                    original_retriever.search_kwargs['k'] = original_k
-            
-            # Debug các kết quả tìm được
-            print(f"[llm_handler] Kết quả sau khi retry: {len(docs)} documents")
-            return docs
-        
-        # Gán phương thức mới cho retriever
-        retriever.get_relevant_documents = get_relevant_documents_wrapper
+        # Kiểm tra xem retriever có tìm thấy kết quả không
+        print("[llm_handler] Kiểm tra retriever có tìm thấy kết quả...")
+        try:
+            test_results = retriever.get_relevant_documents("test query")
+            print(f"[llm_handler] Retriever tìm thấy {len(test_results)} kết quả trong kiểm tra")
+        except Exception as e:
+            print(f"[llm_handler] Lỗi khi test retriever: {e}")
         
         # Khởi tạo chain tiêu chuẩn
         qa_chain = RetrievalQA.from_chain_type(

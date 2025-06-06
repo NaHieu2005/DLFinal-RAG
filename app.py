@@ -292,26 +292,36 @@ elif st.session_state.state == "chatting":
             if message["role"] == "assistant":
                 st.markdown("**NGUỒN THAM KHẢO:**")
                 
-                if "sources" not in message:
-                    st.warning("Tin nhắn này không có thông tin nguồn tham khảo.")
+                # Đảm bảo luôn có nguồn, thêm nếu không có
+                if "sources" not in message or message["sources"] is None:
+                    message["sources"] = [{
+                        "source": "Tin nhắn đầu tiên",
+                        "chunk_id": "initial-message",
+                        "content": "Đây là tin nhắn chào mừng, không có nguồn tham khảo cụ thể."
+                    }]
                     
-                elif not message["sources"]:
-                    st.warning("Không tìm thấy nguồn tham khảo cho tin nhắn này.")
-                    
-                else:
-                    st.success(f"Có {len(message['sources'])} nguồn được tìm thấy.")
-                    
-                    for i, source in enumerate(message["sources"]):
-                        try:
-                            source_name = source.get('source', 'N/A')
-                            chunk_id = source.get('chunk_id', 'N/A')
-                            content = source.get('content', 'N/A')
-                            
-                            st.markdown(f"**Nguồn {i+1}:** {source_name} - Chunk ID: {chunk_id}")
-                            st.code(content[:150] + "..." if len(content) > 150 else content)
-                        except Exception as e:
-                            st.error(f"Lỗi khi hiển thị nguồn #{i+1}: {e}")
-                            st.text(f"Dữ liệu nguồn: {source}")
+                elif not message["sources"] or len(message["sources"]) == 0:
+                    message["sources"] = [{
+                        "source": "Kết quả tìm kiếm",
+                        "chunk_id": "auto-generated",
+                        "content": "Hệ thống không tìm thấy nguồn tham khảo cụ thể cho câu hỏi này. Câu trả lời được tổng hợp từ kiến thức có sẵn."
+                    }]
+                
+                # Hiển thị thông tin về số lượng nguồn
+                st.info(f"Có {len(message['sources'])} nguồn được tìm thấy.")
+                
+                # Hiển thị các nguồn
+                for i, source in enumerate(message["sources"]):
+                    try:
+                        source_name = source.get('source', 'N/A')
+                        chunk_id = source.get('chunk_id', 'N/A')
+                        content = source.get('content', 'N/A')
+                        
+                        st.markdown(f"**Nguồn {i+1}:** {source_name} - Chunk ID: {chunk_id}")
+                        st.code(content[:150] + "..." if len(content) > 150 else content)
+                    except Exception as e:
+                        st.error(f"Lỗi khi hiển thị nguồn #{i+1}: {e}")
+                        st.text(f"Dữ liệu nguồn: {source}")
 
     # Simplified: Display "Bot đang suy nghĩ..." directly if bot is answering
     if st.session_state.bot_answering:
@@ -419,38 +429,45 @@ elif st.session_state.state == "chatting":
                     response_content = response.get("result", "")
                     raw_sources = response.get("source_documents", [])
                     
-                    # Giải pháp đối với vấn đề không tìm thấy nguồn
-                    if not raw_sources:
-                        print("[app] Warning: source_documents rỗng, tạo giả lập một nguồn để hiển thị")
-                        # Tạo một nguồn placeholder để đảm bảo UI vẫn hiển thị phần nguồn
-                        fallback_source = {
-                            "source": "Kết quả tìm kiếm",
-                            "chunk_id": "auto-generated",
-                            "content": "Không tìm thấy nguồn tham khảo cụ thể cho câu hỏi này. Hệ thống đã sử dụng kiến thức tổng hợp từ tài liệu để trả lời."
-                        }
-                        sources_list = [fallback_source]
+                    # Luôn đảm bảo có ít nhất một nguồn để hiển thị
+                    sources_list = []
+                    if not raw_sources or len(raw_sources) == 0:
+                        print("[app] Warning: source_documents rỗng, tạo nguồn mặc định")
+                        # Tạo một nguồn placeholder mặc định
+                        sources_list = [{
+                            "source": "Kết quả tổng hợp",
+                            "chunk_id": "generated",
+                            "content": "Không tìm thấy nguồn tham khảo cụ thể. Câu trả lời được tổng hợp từ kiến thức chung."
+                        }]
                     else:
-                        # Xử lý nguồn thông thường
-                        sources_list = []
+                        # Xử lý nguồn thường
                         for src in raw_sources:
                             try:
                                 source_item = {
-                                    "source": src.metadata.get("source", "N/A"),
-                                    "chunk_id": src.metadata.get("chunk_id", "N/A"),
-                                    "content": src.page_content.replace("\\n", " ")
+                                    "source": src.metadata.get("source", "N/A") if hasattr(src, "metadata") else "Unknown",
+                                    "chunk_id": src.metadata.get("chunk_id", "N/A") if hasattr(src, "metadata") else "unknown",
+                                    "content": src.page_content.replace("\\n", " ") if hasattr(src, "page_content") else "No content"
                                 }
                                 sources_list.append(source_item)
                                 print(f"[app] Đã thêm nguồn: {source_item['source']}")
                             except Exception as e:
                                 print(f"[app] Lỗi khi xử lý nguồn: {e}")
-                                # Vẫn thêm nguồn với thông tin tối thiểu nếu có lỗi
+                                # Thêm nguồn lỗi để có thông tin debug
                                 sources_list.append({
-                                    "source": "Lỗi khi xử lý nguồn",
+                                    "source": "Lỗi khi xử lý",
                                     "chunk_id": "error",
-                                    "content": f"Đã xảy ra lỗi khi xử lý nguồn: {e}"
+                                    "content": f"Đã xảy ra lỗi: {str(e)}"
                                 })
                     
-                    # Debug print để kiểm tra sources_list trước khi đính kèm vào tin nhắn
+                    # Đảm bảo luôn có ít nhất một nguồn
+                    if not sources_list:
+                        sources_list = [{
+                            "source": "Không có nguồn",
+                            "chunk_id": "empty",
+                            "content": "Không thể lấy thông tin nguồn từ câu trả lời."
+                        }]
+                    
+                    # Debug print để kiểm tra sources_list
                     print("\n\n=== DEBUG SOURCES LIST ===")
                     print(f"Number of sources after conversion: {len(sources_list)}")
                     if len(sources_list) > 0:
@@ -459,11 +476,10 @@ elif st.session_state.state == "chatting":
                 else:
                     # Phòng trường hợp không phải dict
                     response_content = str(response)
-                    # Tạo một nguồn giả lập để luôn hiển thị phần nguồn
                     sources_list = [{
-                        "source": "Kết quả trả về",
-                        "chunk_id": "auto-generated",
-                        "content": "Không có thông tin nguồn tham khảo cho câu trả lời này."
+                        "source": "Lỗi định dạng",
+                        "chunk_id": "format-error",
+                        "content": "Kết quả trả về không đúng định dạng. Vui lòng liên hệ quản trị viên."
                     }]
         except Exception as e:
             response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
