@@ -1,0 +1,30 @@
+/* style.css - MINIMAL FOR CHAT INPUT */
+
+/* 1. Ensure chat history doesn't get hidden by the fixed input bar */
+.chat-history-area {
+    /* Adjust if input bar height + padding changes. */
+    /* e.g. 10px bar padding top/bottom + ~40px input height + buffer = ~70px */
+    padding-bottom: 70px; 
+}
+
+/* 2. Style the fixed chat input bar itself */
+.fixed-chat-input-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0; /* Ensures it spans full width */
+    padding: 10px 15px; /* Padding within the bar */
+    background-color: #f0f2f6; /* Light neutral background for the bar */
+    border-top: 1px solid #dcdcdc; /* Subtle top line for separation */
+    z-index: 1000; /* Keep it on top */
+    box-sizing: border-box; /* Consistent box model */
+}
+
+/* 3. Style ALL buttons within the fixed bar for rounded corners */
+.fixed-chat-input-bar button {
+    border-radius: 15px !important; /* Rounded corners. Adjust for more/less rounding. */
+    /* All other button properties (padding, text color, background, etc.) use Streamlit defaults. */
+    /* Width is determined by column & use_container_width=True, or Streamlit's default for inline buttons. */
+}
+
+/* NO OTHER STYLES */ 

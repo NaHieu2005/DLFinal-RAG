@@ -1,0 +1,15 @@
+# Set default behavior to automatically normalize line endings
+* text=auto
+
+# Jupyter notebooks
+*.ipynb filter=dropoutput
+
+# Python
+*.py linguist-language=Python
+
+# UTF-8 encoding for text files
+*.txt text eol=lf
+*.md text eol=lf
+
+# Treat requirements as text
+requirements.txt text 
