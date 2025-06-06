@@ -377,9 +377,9 @@ elif st.session_state.state == "chatting":
                 # Placeholder sẽ tự động xóa ở rerun tiếp theo
                 st.rerun()
             else:
-                response, source_docs = qa_chain({"query": last_user_msg_content})
-                response_content = response
-                sources_list = source_docs if source_docs else []
+                result = qa_chain({"query": last_user_msg_content})
+                response_content = result.get("result", "")
+                sources_list = result.get("source_documents", [])
         except Exception as e:
             response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
         
