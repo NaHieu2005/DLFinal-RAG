@@ -9,10 +9,8 @@ from ragas.metrics import (
 )
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
-
 from langchain_ollama import ChatOllama
 from langchain_huggingface import HuggingFaceEmbeddings
-import asyncio
 from ragas.run_config import RunConfig
 
 #1. DỮ LIỆU CỦA BẠN
@@ -227,13 +225,7 @@ for item in my_evaluation_data_list:
 #2. Khởi tạo LLM Evaluator cục bộ (Ollama) 
 OLLAMA_MODEL_NAME = "llama3:8b"
 ollama_llm = ChatOllama(model=OLLAMA_MODEL_NAME, temperature=0.1)
-# try:
-#     ollama_llm = ChatOllama(model=OLLAMA_MODEL_NAME, temperature=0.1)
-#     print(f"Đã khởi tạo ChatOllama với model: {OLLAMA_MODEL_NAME}")
-# except Exception as e:
-#     print(f"Lỗi khi khởi tạo ChatOllama với model '{OLLAMA_MODEL_NAME}': {e}")
-#     print("Hãy đảm bảo server Ollama đang chạy và model đã được pull.")
-#     exit()
+
 evaluator_llm_ragas = LangchainLLMWrapper(ollama_llm)
 
 #3. Khởi tạo Embedding Model cục bộ
@@ -242,71 +234,38 @@ local_embeddings = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
         model_kwargs={'device': 'cpu'} 
     )
-# try:
-#     local_embeddings = HuggingFaceEmbeddings(
-#         model_name=EMBEDDING_MODEL_NAME,
-#         model_kwargs={'device': 'cpu'} 
-#     )
-#     print(f"Đã khởi tạo HuggingFaceEmbeddings với model: {EMBEDDING_MODEL_NAME}")
-# except Exception as e:
-#     print(f"Lỗi khi khởi tạo HuggingFaceEmbeddings với model '{EMBEDDING_MODEL_NAME}': {e}")
-#     exit()
 evaluator_embeddings_ragas = LangchainEmbeddingsWrapper(local_embeddings)
 
-#4. Chuẩn bị Dataset cho RAGAS (Thực hiện một lần ở global scope)
+#4. Chuẩn bị Dataset cho RAGAS 
 dataset_for_evaluation = EvaluationDataset.from_list(ragas_formatted_data) 
 print(f"Đã tạo EvaluationDataset với {len(dataset_for_evaluation.samples)} mẫu.")
 
-#5. Khởi tạo các Metrics với LLM và Embeddings cục bộ (Thực hiện một lần ở global scope)
+#5. Khởi tạo các Metrics với LLM và Embeddings cục bộ 
 metrics_to_run_globally = [] 
-try:
-    faithfulness = Faithfulness(llm=evaluator_llm_ragas)
-    metrics_to_run_globally.append(faithfulness)
-    print("Đã khởi tạo Faithfulness metric.")
-except Exception as e: print(f"Lỗi Faithfulness: {e}")
 
-try:
-    answer_relevancy = AnswerRelevancy(llm=evaluator_llm_ragas, embeddings=evaluator_embeddings_ragas)
-    metrics_to_run_globally.append(answer_relevancy)
-    print("Đã khởi tạo AnswerRelevancy metric.")
-except Exception as e: print(f"Lỗi AnswerRelevancy: {e}")
+faithfulness = Faithfulness(llm=evaluator_llm_ragas)
+metrics_to_run_globally.append(faithfulness)
 
-try:
-    context_relevance = ContextRelevance(llm=evaluator_llm_ragas)
-    metrics_to_run_globally.append(context_relevance)
-    print("Đã khởi tạo ContextRelevance metric.")
-except Exception as e: print(f"Lỗi ContextRelevance: {e}")
+answer_relevancy = AnswerRelevancy(llm=evaluator_llm_ragas, embeddings=evaluator_embeddings_ragas)
+metrics_to_run_globally.append(answer_relevancy)
+
+context_relevance = ContextRelevance(llm=evaluator_llm_ragas)
+metrics_to_run_globally.append(context_relevance)
 
 # Kiểm tra 'reference' dựa trên dataset_for_evaluation đã tạo
 if all(hasattr(sample, 'reference') and sample.reference is not None for sample in dataset_for_evaluation.samples):
-    try:
-        context_recall = ContextRecall(llm=evaluator_llm_ragas)
-        metrics_to_run_globally.append(context_recall)
-        print("Đã khởi tạo ContextRecall metric.")
-    except Exception as e: print(f"Lỗi ContextRecall: {e}")
-    try:
-        context_precision = ContextPrecision(llm=evaluator_llm_ragas)
-        metrics_to_run_globally.append(context_precision)
-        print("Đã khởi tạo ContextPrecision metric.")
-    except Exception as e: print(f"Lỗi ContextPrecision: {e}")
+    context_recall = ContextRecall(llm=evaluator_llm_ragas)
+    metrics_to_run_globally.append(context_recall)
+
+    context_precision = ContextPrecision(llm=evaluator_llm_ragas)
+    metrics_to_run_globally.append(context_precision)
 else:
     print("Bỏ qua ContextRecall vì không phải tất cả các mẫu đều có 'reference' hoặc 'reference' là None.")
-
-if not metrics_to_run_globally:
-    print("Không có metric nào được khởi tạo thành công. Kết thúc.")
-    exit()
-print(f"\nSẵn sàng đánh giá với các metrics: {[m.name for m in metrics_to_run_globally]}")
+print(f"\nĐánh giá với các metrics: {[m.name for m in metrics_to_run_globally]}")
 
 
 #6. Chạy Đánh giá
 def run_evaluation(current_dataset, current_metrics):
-    if not current_metrics:
-        print("Không có metric nào để chạy.")
-        return None
-    if not current_dataset or not current_dataset.samples:
-        print("Dataset rỗng.")
-        return None
-
     print(f"\nThực hiện đánh giá với các metrics: {[m.name for m in current_metrics]}")
     print(f"Số lượng mẫu trong dataset: {len(current_dataset.samples)}")
     print("\nBắt đầu quá trình đánh giá với RAGAS và Ollama (có thể mất thời gian)...")
