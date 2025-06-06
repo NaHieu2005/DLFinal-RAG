@@ -1,7 +1,5 @@
 import streamlit as st
 from core.chat_history import list_chat_sessions
-# from core.embedding_handler import VECTOR_STORES_DIR
-# import os
 
 def sidebar():
     st.header("📁 Quản lý Chat")

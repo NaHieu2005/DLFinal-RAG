@@ -6,18 +6,20 @@ from langchain.storage import InMemoryStore
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import streamlit as st
 import os
+import hashlib
 import pickle
-from config import embedding_model_name, VECTOR_STORES_DIR, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, EMBEDDING_DEVICE
+import json
+from config import embedding_model_name, VECTOR_STORES_DIR, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP
 import time
 
 # Cache để không phải tạo lại embedding model mỗi lần
 @st.cache_resource
 def get_embedding_model():
     try:
-        print(f"[embedding_handler] Bắt đầu khởi tạo HuggingFaceEmbeddings với device={EMBEDDING_DEVICE}...")
+        print("[embedding_handler] Bắt đầu khởi tạo HuggingFaceEmbeddings...")
         return HuggingFaceEmbeddings(
             model_name=embedding_model_name,
-            model_kwargs={'device': EMBEDDING_DEVICE}
+            model_kwargs={'device': 'cpu'} # Sửa thành 'cpu' để tránh lỗi CUDA
         )
     except Exception as e:
         print(f"[embedding_handler] Lỗi khi tải embedding model: {e}")
@@ -29,57 +31,7 @@ def generate_session_id(file_names):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     return f"{base}_{timestamp}"
 
-# Hàm mới cho phép tạo embeddings theo batch để tăng tốc 
-@st.cache_data(ttl=3600)  # Cache kết quả embedding với thời hạn 1 giờ
-def create_embeddings_in_batches(texts, embedding_model, batch_size=32):
-    """Tạo embeddings theo batch để tăng hiệu suất."""
-    print(f"[embedding_handler] Tạo embeddings cho {len(texts)} văn bản theo batch_size={batch_size}")
-    
-    all_embeddings = []
-    total_batches = (len(texts) + batch_size - 1) // batch_size
-    
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i:i+batch_size]
-        batch_embeddings = embedding_model.embed_documents(batch_texts)
-        all_embeddings.extend(batch_embeddings)
-        
-        # Cập nhật tiến độ
-        if i % (batch_size * 10) == 0 or i + batch_size >= len(texts):
-            current_batch = (i + batch_size) // batch_size
-            print(f"[embedding_handler] Đang tạo embeddings: {current_batch}/{total_batches} batches xong ({(current_batch/total_batches)*100:.1f}%)")
-    
-    return all_embeddings
-
-# Cache để không phải tạo lại vector store mỗi lần tương tác cho cùng một bộ tài liệu
-# Lưu ý: _documents và _embedding_model_name giờ đây nên được thay thế bằng một ID định danh cho bộ tài liệu đó
-# Tuy nhiên, vì chúng ta sẽ lưu và tải vector store, việc cache get_vector_store có thể không còn quá quan trọng
-# nếu việc tải từ disk đủ nhanh. Hiện tại vẫn giữ cache cho việc tạo mới.
-def create_vector_store_from_documents(_documents, _embedding_model_instance):
-    """Tạo FAISS vector store từ các document đã chia chunk."""
-    print("[embedding_handler] Bắt đầu tạo vector store từ documents (không cache resource)...")
-    if _documents and _embedding_model_instance:
-        try:
-            # Tách texts và metadatas
-            texts = [doc.page_content for doc in _documents]
-            metadatas = [doc.metadata for doc in _documents]
-            
-            # Tạo embeddings theo batch
-            embeddings = create_embeddings_in_batches(texts, _embedding_model_instance)
-            
-            # Tạo vector store từ embeddings đã tính toán trước
-            vector_store_instance = FAISS.from_embeddings(
-                text_embeddings=list(zip(texts, embeddings)),
-                embedding=_embedding_model_instance,
-                metadatas=metadatas
-            )
-            print("[embedding_handler] Đã tạo xong vector store.")
-            return vector_store_instance
-        except Exception as e:
-            print(f"[embedding_handler] Lỗi khi tạo vector store: {e}")
-            st.error(f"Lỗi khi tạo vector store: {e}")
-            return None
-    print("[embedding_handler] Không có documents hoặc embedding model instance.")
-    return None
+# Hàm create_vector_store_from_documents đã được thay thế bởi get_or_create_vector_store
 
 def save_vector_store(vector_store_instance, vs_id):
     """Lưu FAISS vector store vào disk."""
@@ -101,17 +53,15 @@ def save_vector_store(vector_store_instance, vs_id):
     return None
 
 def load_vector_store(vs_id, _embedding_model_instance):
-    """Tải vector store từ disk."""
+    """Tải FAISS vector store từ disk."""
     load_path = os.path.join(VECTOR_STORES_DIR, vs_id)
-    if os.path.exists(load_path):
+    if os.path.exists(load_path) and _embedding_model_instance:
         try:
-            # Thêm tham số allow_dangerous_deserialization=True để cho phép pickle
-            vector_store = FAISS.load_local(load_path, _embedding_model_instance, allow_dangerous_deserialization=True)
-            print(f"[embedding_handler] Đã tải vector store từ: {load_path}")
-            return vector_store
+            print(f"[embedding_handler] Đang tải vector store từ: {load_path}")
+            return FAISS.load_local(load_path, _embedding_model_instance, allow_dangerous_deserialization=True)
         except Exception as e:
             print(f"[embedding_handler] Lỗi khi tải vector store từ '{load_path}': {e}")
-            st.error(f"Lỗi khi tải vector store '{vs_id}': {e}")
+            st.error(f"Lỗi khi tải vector store từ '{load_path}': {e}. Có thể cần phải tạo lại.")
             return None
     print(f"[embedding_handler] Không tìm thấy vector store tại: {load_path}")
     return None
@@ -134,6 +84,89 @@ def save_parent_chunks(parent_chunks, vs_id):
             st.error(f"Lỗi khi lưu parent chunks: {e}")
             return None
     print("[embedding_handler] Không có parent chunks hoặc vs_id để lưu.")
+    return None
+
+def save_retriever_config(retriever, vs_id):
+    """Lưu cấu hình retriever thay vì đối tượng trực tiếp để tránh vấn đề serialize."""
+    if retriever and vs_id:
+        directory = os.path.join(VECTOR_STORES_DIR, vs_id)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        
+        # Lưu cấu hình thay vì đối tượng
+        config = {
+            "type": type(retriever).__name__,
+            "search_kwargs": {"k": 5},  # Các tham số cơ bản
+            "child_ids_key": "parent_id" if hasattr(retriever, "child_ids_key") else None,
+            "vs_id": vs_id
+        }
+        
+        save_path = os.path.join(directory, "retriever_config.json")
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            print(f"[embedding_handler] Đã lưu cấu hình retriever vào: {save_path}")
+            return save_path
+        except Exception as e:
+            print(f"[embedding_handler] Lỗi khi lưu cấu hình retriever: {e}")
+            st.error(f"Lỗi khi lưu cấu hình retriever: {e}")
+            return None
+    print("[embedding_handler] Không có retriever hoặc vs_id để lưu.")
+    return None
+
+def load_retriever_from_config(vs_id, embedding_model_instance):
+    """Tạo lại retriever từ cấu hình đã lưu và vector store."""
+    config_path = os.path.join(VECTOR_STORES_DIR, vs_id, "retriever_config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            
+            print(f"[embedding_handler] Đã tải cấu hình retriever từ: {config_path}")
+            
+            # Tải vector store và parent chunks
+            vectorstore = load_vector_store(vs_id, embedding_model_instance)
+            parent_chunks = load_parent_chunks(vs_id)
+            
+            if not vectorstore:
+                print(f"[embedding_handler] Không thể tải vector store cho session: {vs_id}")
+                return None
+                
+            # Nếu là ParentDocumentRetriever, cần tạo docstore
+            if config.get("type") == "ParentDocumentRetriever" and parent_chunks:
+                # Khởi tạo docstore và điền parent documents
+                docstore = InMemoryStore()
+                for p_doc in parent_chunks:
+                    if "parent_id" in p_doc.metadata:
+                        docstore.mset([(p_doc.metadata["parent_id"], p_doc)])
+                
+                # Tạo child_splitter
+                child_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=CHILD_CHUNK_SIZE,
+                    chunk_overlap=CHILD_CHUNK_OVERLAP
+                )
+                
+                # Tạo ParentDocumentRetriever
+                try:
+                    parent_retriever = ParentDocumentRetriever(
+                        vectorstore=vectorstore,
+                        docstore=docstore,
+                        child_splitter=child_splitter,
+                        search_kwargs=config.get("search_kwargs", {"k": 5}),
+                        child_ids_key=config.get("child_ids_key", "parent_id")
+                    )
+                    print(f"[embedding_handler] Đã tạo lại retriever từ cấu hình")
+                    return parent_retriever
+                except Exception as e:
+                    print(f"[embedding_handler] Lỗi khi tạo lại ParentDocumentRetriever: {e}")
+            
+            # Fallback: trả về retriever đơn giản
+            return vectorstore.as_retriever(search_kwargs=config.get("search_kwargs", {"k": 5}))
+            
+        except Exception as e:
+            print(f"[embedding_handler] Lỗi khi tải cấu hình retriever từ '{config_path}': {e}")
+            return None
+    print(f"[embedding_handler] Không tìm thấy cấu hình retriever tại: {config_path}")
     return None
 
 def load_parent_chunks(vs_id):
@@ -163,11 +196,11 @@ def create_advanced_retriever(parent_chunks, child_chunks, embedding_model_insta
     
     # Khởi tạo BM25Retriever cho child chunks
     bm25_retriever = BM25Retriever.from_documents(child_chunks)
-    bm25_retriever.k = 10  # Tăng số lượng kết quả trả về
+    bm25_retriever.k = 5  # Số lượng kết quả trả về
     
     # Khởi tạo FAISS vector store cho child chunks
     vectorstore = FAISS.from_documents(child_chunks, embedding_model_instance)
-    faiss_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})  # Tăng k lên 10
+    faiss_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     
     # Hybrid retriever kết hợp BM25 và FAISS với trọng số ngang nhau
     ensemble_retriever = EnsembleRetriever(
@@ -181,33 +214,24 @@ def create_advanced_retriever(parent_chunks, child_chunks, embedding_model_insta
         chunk_overlap=CHILD_CHUNK_OVERLAP
     )
     
-    # Thêm parent documents vào docstore TRƯỚC khi khởi tạo ParentDocumentRetriever
+    # Khởi tạo ParentDocumentRetriever
+    parent_retriever = ParentDocumentRetriever(
+        vectorstore=vectorstore,  # Sử dụng vectorstore cho child chunks
+        docstore=docstore,  # Lưu trữ parent chunks
+        child_splitter=child_splitter,  # Bắt buộc phải có
+        search_kwargs={"k": 5},
+        child_ids_key="parent_id"  # Khóa liên kết giữa child và parent
+    )
+    
+    # Thêm parent documents vào docstore
     for p_doc in parent_chunks:
         if "parent_id" in p_doc.metadata:
             docstore.mset([(p_doc.metadata["parent_id"], p_doc)])
     
-    # Khởi tạo ParentDocumentRetriever
-    try:
-        # Tăng search_kwargs để tìm thấy nhiều kết quả hơn
-        parent_retriever = ParentDocumentRetriever(
-            vectorstore=vectorstore,  # Sử dụng vectorstore cho child chunks
-            docstore=docstore,  # Lưu trữ parent chunks
-            child_splitter=child_splitter,  # Bắt buộc phải có
-            search_kwargs={"k": 15},  # Tăng k để đảm bảo tìm thấy kết quả
-            child_ids_key="parent_id"  # Khóa liên kết giữa child và parent
-        )
-        
-        # Patch phương thức invoke nếu cần
-        parent_retriever = patch_retriever_invoke(parent_retriever)
-        
-        # Fallback nếu ParentDocumentRetriever gặp vấn đề
-        print(f"[embedding_handler] Đã khởi tạo advanced retriever với {len(parent_chunks)} parent chunks và {len(child_chunks)} child chunks.")
-        return parent_retriever, vectorstore
-    except Exception as e:
-        print(f"[embedding_handler] Lỗi khi tạo ParentDocumentRetriever: {e}")
-        print(f"[embedding_handler] Sử dụng simple retriever thay thế")
-        # Trả về FAISS retriever đơn giản nếu gặp lỗi
-        return faiss_retriever, vectorstore
+    print(f"[embedding_handler] Đã khởi tạo advanced retriever với {len(parent_chunks)} parent chunks và {len(child_chunks)} child chunks.")
+    
+    # Sử dụng ensemble_retriever thay vì chỉ parent_retriever
+    return ensemble_retriever, vectorstore
 
 def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     """
@@ -216,7 +240,13 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     """
     print(f"[embedding_handler] Đang tái tạo advanced retriever cho session: {vs_id}")
     
-    # Tải vector store đã lưu
+    # Thử tải retriever từ cấu hình
+    retriever = load_retriever_from_config(vs_id, embedding_model_instance)
+    if retriever:
+        print(f"[embedding_handler] Đã tải trực tiếp retriever đã lưu cho session: {vs_id}")
+        return retriever
+    
+    # Nếu không có retriever đã lưu, tải vector store đã lưu
     vectorstore = load_vector_store(vs_id, embedding_model_instance)
     if not vectorstore:
         print(f"[embedding_handler] Không thể tải vector store cho session: {vs_id}")
@@ -227,30 +257,13 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     if not parent_chunks:
         print(f"[embedding_handler] Không thể tải parent chunks cho session: {vs_id}")
         print(f"[embedding_handler] Sẽ sử dụng retriever đơn giản thay thế.")
-        # Log chi tiết để dễ debug
-        vs_path = os.path.join(VECTOR_STORES_DIR, vs_id)
-        parent_path = os.path.join(VECTOR_STORES_DIR, vs_id, "parent_chunks.pkl")
-        print(f"[embedding_handler] Kiểm tra VS path: {os.path.exists(vs_path)}, Parent path: {os.path.exists(parent_path)}")
-        
-        # Fallback to simple retriever
-        simple_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-        return patch_retriever_invoke(simple_retriever)
+        return vectorstore.as_retriever(search_kwargs={"k": 5})
     
     # Khởi tạo docstore và điền parent documents
     docstore = InMemoryStore()
-    valid_parents = 0
-    
     for p_doc in parent_chunks:
         if "parent_id" in p_doc.metadata:
             docstore.mset([(p_doc.metadata["parent_id"], p_doc)])
-            valid_parents += 1
-        else:
-            print(f"[embedding_handler] Cảnh báo: Tìm thấy parent chunk không có parent_id trong metadata")
-    
-    if valid_parents == 0:
-        print(f"[embedding_handler] Không có parent chunk nào có parent_id hợp lệ. Sẽ sử dụng retriever đơn giản.")
-        simple_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-        return patch_retriever_invoke(simple_retriever)
     
     # Tạo child_splitter là bắt buộc cho ParentDocumentRetriever
     child_splitter = RecursiveCharacterTextSplitter(
@@ -267,11 +280,11 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
             search_kwargs={"k": 5},
             child_ids_key="parent_id"
         )
+        print(f"[embedding_handler] Đã tái tạo thành công ParentDocumentRetriever với {len(parent_chunks)} parent chunks")
         
-        # Patch phương thức invoke nếu cần
-        parent_retriever = patch_retriever_invoke(parent_retriever)
+        # Lưu cấu hình retriever để lần sau không cần tái tạo
+        save_retriever_config(parent_retriever, vs_id)
         
-        print(f"[embedding_handler] Đã tái tạo thành công ParentDocumentRetriever với {valid_parents}/{len(parent_chunks)} parent chunks")
         return parent_retriever
     except Exception as e:
         print(f"[embedding_handler] Lỗi khi tái tạo ParentDocumentRetriever: {e}")
@@ -298,11 +311,6 @@ def get_or_create_vector_store(p_session_id, documents_info, embedding_model_ins
         return retriever, vs_id
     
     # Kiểm tra định dạng của documents_info
-    if documents_info is None:
-        print(f"[embedding_handler] documents_info là None, không thể tạo vector store mới cho ID: {vs_id}")
-        return None, None
-
-    # Xử lý định dạng parent-child
     if isinstance(documents_info, tuple) and len(documents_info) == 2:
         parent_chunks, child_chunks = documents_info
         if parent_chunks and child_chunks:
@@ -315,48 +323,42 @@ def get_or_create_vector_store(p_session_id, documents_info, embedding_model_ins
                 # Lưu cả vector store và parent chunks
                 save_path = save_vector_store(vector_store, vs_id)
                 parent_path = save_parent_chunks(parent_chunks, vs_id)
-                if save_path and parent_path:
-                    print(f"[embedding_handler] Đã lưu đầy đủ vector store và parent chunks tại: {save_path}")
+                # Lưu cấu hình retriever
+                retriever_path = save_retriever_config(parent_retriever, vs_id)
+                
+                if save_path and parent_path and retriever_path:
+                    print(f"[embedding_handler] Đã lưu đầy đủ vector store, parent chunks và retriever tại: {save_path}")
                 else:
-                    print(f"[embedding_handler] Có lỗi khi lưu vector store hoặc parent chunks cho ID: {vs_id}")
+                    print(f"[embedding_handler] Có lỗi khi lưu vector store, parent chunks hoặc retriever cho ID: {vs_id}")
             
-                # Trả về parent_retriever để sử dụng cho Parent Document Retrieval
-                return parent_retriever, vs_id
-            else:
-                print(f"[embedding_handler] parent_chunks hoặc child_chunks rỗng cho ID: {vs_id}")
-                return None, None
-    # Xử lý định dạng tài liệu truyền thống
-    elif isinstance(documents_info, list):
+            # Trả về parent_retriever để sử dụng cho Parent Document Retrieval
+            return parent_retriever, vs_id
+    else:
+        # Xử lý trường hợp documents truyền thống (để tương thích ngược)
         documents = documents_info
         if documents:
             print(f"[embedding_handler] Đang tạo vector store thông thường cho ID: {vs_id}...")
-            vector_store = create_vector_store_from_documents(documents, embedding_model_instance)
+            vector_store = FAISS.from_documents(documents, embedding_model_instance)
             if vector_store and save:
                 save_vector_store(vector_store, vs_id)
-            return vector_store.as_retriever(), vs_id
-        else:
-            print(f"[embedding_handler] documents là list rỗng cho ID: {vs_id}")
-            return None, None
-    else:
-        print(f"[embedding_handler] documents_info không phải tuple (parent_chunks, child_chunks) hoặc list documents. Kiểu dữ liệu: {type(documents_info)}")
-        return None, None
-
-# Patch function that can be reused
-def patch_retriever_invoke(retriever):
-    """Thêm phương thức invoke cho retriever nếu chưa có."""
-    if not hasattr(retriever, 'invoke') or callable(getattr(retriever, 'invoke', None)) is False:
-        print("[embedding_handler] Patch phương thức invoke cho retriever")
-        
-        def patched_invoke(self, query, *args, **kwargs):
-            if hasattr(self, 'get_relevant_documents'):
-                return self.get_relevant_documents(query)
-            else:
-                print("[embedding_handler] Lỗi: Không tìm thấy phương thức get_relevant_documents")
-                return []
-                
-        import types
-        retriever.invoke = types.MethodType(patched_invoke, retriever)
+            return vector_store, vs_id
     
-    return retriever
+    print(f"[embedding_handler] Không thể tạo vector store cho ID: {vs_id}")
+    return None, None
+
+# Hàm save_retriever cũ đã được thay thế bằng save_retriever_config để tránh các vấn đề serialize
+
+def load_retriever(vs_id, embedding_model_instance=None):
+    """Hàm wrapper để tương thích ngược - Chuyển hướng sang load_retriever_from_config."""
+    if embedding_model_instance is None:
+        print("[embedding_handler] WARNING: embedding_model_instance không được cung cấp cho load_retriever")
+        # Thử lấy embedding model từ get_embedding_model
+        try:
+            embedding_model_instance = get_embedding_model()
+        except:
+            print("[embedding_handler] Không thể tự động lấy embedding_model_instance")
+            return None
+    
+    return load_retriever_from_config(vs_id, embedding_model_instance)
 
 # (Code for get_vector_store, save_vector_store, load_vector_store will go here) 

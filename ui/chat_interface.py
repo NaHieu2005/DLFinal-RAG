@@ -5,6 +5,8 @@ def file_upload_screen(uploaded_files=None):
     Giao diện chỉ cho upload file và nút Bắt đầu.
     """
     st.markdown("### 📄 Tải lên tài liệu (.txt, .pdf)")
+    
+    # Sử dụng key cố định để đảm bảo Streamlit giữ lại file giữa các lần render
     files = st.file_uploader(
         "Chọn một hoặc nhiều file:",
         type=["txt", "pdf"],
@@ -20,9 +22,11 @@ def file_upload_screen(uploaded_files=None):
                 error_files[f.name] = "File rỗng"
             else:
                 valid_files.append(f)
+                
+        print(f"[chat_interface] Đã tải lên {len(valid_files)} file hợp lệ")
 
     start_clicked = st.button("🚀 Bắt đầu", disabled=not valid_files, use_container_width=True)
-    return valid_files, error_files, start_clicked, False
+    return valid_files, error_files, start_clicked
 
 def processing_screen(uploaded_files):
     """

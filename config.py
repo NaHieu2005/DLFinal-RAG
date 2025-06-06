@@ -7,10 +7,6 @@ COHERE_API_KEY = "LSsVgNhEJmAWepOBmRNcSwXABh18VtmMXWYGLpD2" # Thêm API key củ
 embedding_model_name = "bkai-foundation-models/vietnamese-bi-encoder"
 ollama_model_name = "llama3:8b-instruct-q4_0"
 
-# Cấu hình device (cuda/cpu)
-USE_CUDA = os.environ.get("USE_CUDA", "False").lower() in ("true", "1", "t")  # Mặc định là False
-EMBEDDING_DEVICE = "cuda" if USE_CUDA else "cpu"
-
 # Cấu hình chunking
 PARENT_CHUNK_SIZE = 1500
 PARENT_CHUNK_OVERLAP = 200

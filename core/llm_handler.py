@@ -79,12 +79,23 @@ def get_qa_retrieval_chain(llm_instance, retriever):
     
     print("[llm_handler] Bắt đầu khởi tạo RetrievalQA chain...")
     
-    # Quay lại prompt template cũ đã được chứng minh hoạt động tốt
+    # Nâng cấp prompt template để cải thiện chất lượng câu trả lời
     prompt_template_str = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-Bạn là một trợ lý AI hữu ích, chuyên trả lời các câu hỏi dựa trên nội dung tài liệu được cung cấp.
-Hãy sử dụng các đoạn thông tin sau đây để trả lời câu hỏi của người dùng.
-Nếu bạn không biết câu trả lời dựa trên thông tin được cung cấp, hãy nói rằng bạn không biết hoặc thông tin không có trong tài liệu. Đừng cố bịa ra câu trả lời.
-Luôn trả lời bằng tiếng Việt một cách rõ ràng và mạch lạc.
+Bạn là một trợ lý AI chuyên nghiệp, chỉ được phép trả lời dựa trên "Thông tin tham khảo" bên dưới. Nếu không tìm thấy thông tin, hãy trả lời đúng là "Thông tin này không có trong tài liệu được cung cấp.".
+
+**Quy trình làm việc:**
+1. Đọc kỹ câu hỏi và toàn bộ "Thông tin tham khảo" được cung cấp.
+2. Tìm kiếm, xác định và trích xuất các đoạn, câu, dữ kiện hoặc ý liên quan trực tiếp đến câu hỏi trong tài liệu.
+3. Đối chiếu, tổng hợp, phân tích các thông tin liên quan này để tạo thành một câu trả lời ngắn gọn, rõ ràng, đúng trọng tâm, có thể so sánh hoặc làm rõ nếu cần thiết.
+4. Nếu có nhiều nguồn hoặc ý trong tài liệu, hãy tổng hợp, so sánh, hoặc làm rõ các điểm khác biệt hoặc bổ sung lẫn nhau.
+5. Nếu không có thông tin phù hợp, trả lời đúng: "Thông tin này không có trong tài liệu được cung cấp." (không thêm thắt gì khác).
+6. Luôn trả lời bằng tiếng Việt.
+
+**Yêu cầu nghiêm ngặt:**
+- Chỉ sử dụng thông tin có trong "Thông tin tham khảo".
+- Không được bịa, không được tự chế, không được tự tạo ví dụ, không được tự đưa ra nhận định ngoài tài liệu, không được trả lời dựa trên kiến thức nền, không nói lan man.
+- Không được nói lại yêu cầu, không được nói lại câu hỏi, không được nói lại nội dung tài liệu.
+- Trả lời ngắn gọn, đúng trọng tâm, không giải thích lan man, không thêm thắt.
 
 Thông tin tham khảo:
 {context}<|eot_id|><|start_header_id|>user<|end_header_id|>
@@ -97,26 +108,11 @@ Câu trả lời hữu ích:"""
             template=prompt_template_str, input_variables=["context", "question"]
         )
         
-        # Tăng k cho retriever để đảm bảo luôn có kết quả
-        if hasattr(retriever, 'search_kwargs'):
-            # Đảm bảo k đủ lớn
-            retriever.search_kwargs["k"] = max(retriever.search_kwargs.get("k", 5), 8)
-            # Giảm score_threshold nếu có
-            if "score_threshold" in retriever.search_kwargs:
-                retriever.search_kwargs["score_threshold"] = min(retriever.search_kwargs["score_threshold"], 0.5)
-        
-        # LƯU Ý: KHÔNG sử dụng Cohere reranker vì gây ra lỗi
-        # Bỏ đoạn sau để tránh lỗi
-        """
         # Thêm reranking nếu COHERE_API_KEY được cung cấp
         reranker = get_reranker()
         if reranker:
             print("[llm_handler] Sử dụng Cohere Reranker để cải thiện kết quả...")
             try:
-                # Đảm bảo top_n đủ lớn để có kết quả
-                if hasattr(reranker, 'top_n'):
-                    reranker.top_n = max(reranker.top_n, 5)  # Đảm bảo ít nhất 5 kết quả
-                
                 compression_retriever = ContextualCompressionRetriever(
                     base_compressor=reranker,
                     base_retriever=retriever
@@ -125,29 +121,6 @@ Câu trả lời hữu ích:"""
             except Exception as e:
                 print(f"[llm_handler] Lỗi khi khởi tạo contextual compression: {e}")
                 # Giữ nguyên retriever nếu lỗi
-        """
-        
-        # Kiểm tra xem retriever có tìm thấy kết quả không
-        print("[llm_handler] Kiểm tra retriever có tìm thấy kết quả...")
-        try:
-            # Sử dụng phương thức mới .invoke thay vì .get_relevant_documents đã bị deprecate
-            from langchain_core.runnables.config import RunnableConfig
-            test_results = retriever.invoke("test query", config=RunnableConfig(run_name="Test Query"))
-            print(f"[llm_handler] Retriever tìm thấy {len(test_results)} kết quả trong kiểm tra")
-            
-            # Nếu không tìm thấy kết quả, đảm bảo retriever vẫn hoạt động
-            if len(test_results) == 0:
-                print("[llm_handler] Cảnh báo: Không tìm thấy kết quả trong test query")
-        except Exception as e:
-            print(f"[llm_handler] Lỗi khi test retriever với invoke: {e}")
-            # Dùng phương thức cũ nếu phương thức mới fails
-            try:
-                if hasattr(retriever, 'get_relevant_documents'):
-                    print("[llm_handler] Thử lại với get_relevant_documents...")
-                    test_results = retriever.get_relevant_documents("test query")
-                    print(f"[llm_handler] Retriever tìm thấy {len(test_results)} kết quả trong kiểm tra")
-            except Exception as e2:
-                print(f"[llm_handler] Tiếp tục lỗi khi test retriever: {e2}")
         
         # Khởi tạo chain tiêu chuẩn
         qa_chain = RetrievalQA.from_chain_type(

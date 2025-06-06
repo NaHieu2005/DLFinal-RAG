@@ -2,67 +2,15 @@ import streamlit as st
 from ui.sidebar import sidebar
 from ui.chat_interface import file_upload_screen, processing_screen, chat_screen
 from core.document_processor import process_uploaded_files
-from core.embedding_handler import (
-    get_embedding_model, 
-    get_or_create_vector_store, 
-    generate_session_id,
-    recreate_retriever_from_saved
-)
+from core.embedding_handler import get_embedding_model, get_or_create_vector_store, generate_session_id, recreate_retriever_from_saved
 from core.llm_handler import get_llm_instance, get_qa_retrieval_chain, get_reranker
-from core.chat_history import save_chat_history, load_chat_history, list_chat_sessions
-from config import CHAT_HISTORIES_DIR, VECTOR_STORES_DIR
+from core.chat_history import save_chat_history, load_chat_history
 import os
 import shutil
+from config import CHAT_HISTORIES_DIR, VECTOR_STORES_DIR
 import uuid
-import json
-from datetime import datetime
-from langchain_community.vectorstores import FAISS
-from langchain.docstore.document import Document
 
 st.set_page_config(page_title="Chatbot Tài Liệu RAG", layout="wide")
-
-# Thêm hàm trực tiếp tìm kiếm tài liệu khi retriever thất bại
-def direct_vector_search(question, embedding_model, vs_id, top_k=10):
-    """
-    Tìm kiếm trực tiếp từ vector store khi retriever thông thường thất bại.
-    Trả về list các Document.
-    """
-    if not embedding_model or not vs_id:
-        print("[app] Không thể thực hiện tìm kiếm trực tiếp - thiếu model hoặc vector store ID")
-        return []
-    
-    try:
-        # Tìm đường dẫn đến vector store
-        vs_path = os.path.join(VECTOR_STORES_DIR, vs_id)
-        if not os.path.exists(vs_path):
-            print(f"[app] Không tìm thấy vector store tại {vs_path}")
-            return []
-            
-        # Tải FAISS vector store trực tiếp
-        try:
-            print(f"[app] Đang tải FAISS vector store từ {vs_path}...")
-            vector_store = FAISS.load_local(vs_path, embedding_model, allow_dangerous_deserialization=True)
-            
-            # Thực hiện tìm kiếm
-            print(f"[app] Thực hiện tìm kiếm trực tiếp với k={top_k}...")
-            docs_with_score = vector_store.similarity_search_with_score(question, k=top_k)
-            
-            # Lọc kết quả có điểm số tốt
-            docs = [doc for doc, score in docs_with_score]
-            print(f"[app] Tìm thấy {len(docs)} kết quả trong tìm kiếm trực tiếp")
-            
-            # Thêm thông tin vào metadata
-            for doc in docs:
-                doc.metadata["direct_search"] = True
-                
-            return docs
-            
-        except Exception as e:
-            print(f"[app] Lỗi khi tải vector store: {e}")
-            return []
-    except Exception as e:
-        print(f"[app] Lỗi trong direct_vector_search: {e}")
-        return []
 
 def local_css(file_name):
     with open(file_name, encoding="utf-8") as f:
@@ -77,7 +25,7 @@ with st.sidebar:
 # --- Session State ---
 def reset_to_upload():
     keys_to_reset = [
-        "uploaded_files", "vector_store", "retriever", "session_id", 
+        "uploaded_files", "vector_store", "session_id", 
         "file_names", "messages", "current_session_display_name"
     ]
     for key in keys_to_reset:
@@ -86,22 +34,16 @@ def reset_to_upload():
     st.session_state.processing = False
     st.session_state.bot_answering = False
     st.session_state.messages = [] # Đảm bảo messages là list rỗng
-    clear_memory() # Gọi hàm mới để giải phóng bộ nhớ
 
-# Hàm mới để giải phóng bộ nhớ
-def clear_memory():
-    """Giải phóng bộ nhớ bằng cách xóa các đối tượng lớn khỏi session_state"""
-    import gc
+    # Đảm bảo reset retriever
+    st.session_state.retriever = None
     
-    # Hủy bỏ các đối tượng lớn
-    if "retriever" in st.session_state:
-        st.session_state.retriever = None
-    if "vector_store" in st.session_state:
-        st.session_state.vector_store = None
-        
-    # Buộc garbage collector thu hồi bộ nhớ
-    gc.collect()
-    print("[app] Đã giải phóng bộ nhớ không cần thiết")
+    # Không xóa file_uploader state để giữ lại file đã upload
+    # Streamlit sẽ tự quản lý uploader state
+    
+    print("[app] Đã reset toàn bộ session state về trạng thái upload")
+
+# Hàm reset_to_chat đã được loại bỏ vì không còn cần thiết
 
 # Khởi tạo session_state nếu chưa có
 default_states = {
@@ -123,7 +65,10 @@ for key, value in default_states.items():
 
 # --- Xử lý New Chat hoặc chọn chat cũ ---
 if new_chat:
+    print("[app] Người dùng đã nhấn New Chat, đang reset...")
     reset_to_upload()
+    # Giữ lại file đã upload khi nhấn New Chat
+    # Không tạo giá trị ngẫu nhiên để uploader key không thay đổi
     st.rerun()
 
 if selected_session_id:
@@ -156,7 +101,7 @@ if selected_session_id:
 if st.session_state.state == "upload":
     st.title("💬 Chatbot Hỏi Đáp Tài Liệu (RAG với Llama 3)")
     st.markdown("#### Tải lên tài liệu của bạn để bắt đầu")
-    valid_files, error_files, start_clicked, _ = file_upload_screen(st.session_state.uploaded_files)
+    valid_files, error_files, start_clicked = file_upload_screen(st.session_state.uploaded_files)
     if valid_files:
         st.session_state.uploaded_files = valid_files
     else:
@@ -183,10 +128,12 @@ elif st.session_state.state == "processing":
     st.title(f"⚙️ Đang xử lý: {st.session_state.current_session_display_name}")
     if not st.session_state.uploaded_files:
         st.warning("Không có file nào để xử lý. Vui lòng quay lại và tải lên.")
+        print("[app] Trạng thái processing nhưng không có uploaded_files")
         if st.button("Quay lại trang Upload"):
             reset_to_upload()
             st.rerun()
     else:
+        print(f"[app] Đang xử lý {len(st.session_state.uploaded_files)} file")
         stop_processing_clicked = processing_screen(st.session_state.uploaded_files)
         if stop_processing_clicked:
             st.warning("Đã dừng quá trình xử lý tài liệu.")
@@ -194,11 +141,14 @@ elif st.session_state.state == "processing":
             st.rerun()
         else:
             if not st.session_state.vector_store and not st.session_state.retriever:  # Chỉ xử lý nếu chưa có vector_store hoặc retriever
+                print("[app] Bắt đầu xử lý tài liệu...")
                 parent_chunks, child_chunks = process_uploaded_files(st.session_state.uploaded_files)
                 
                 if parent_chunks and child_chunks:
+                    print(f"[app] Đã tạo {len(parent_chunks)} parent chunks và {len(child_chunks)} child chunks")
                     embedding_model = get_embedding_model()
                     if embedding_model:
+                        print("[app] Đã khởi tạo embedding model, đang tạo vector store...")
                         # Truyền cả parent_chunks và child_chunks để xử lý nâng cao
                         retriever, vs_id_saved = get_or_create_vector_store(
                             st.session_state.session_id, 
@@ -308,73 +258,15 @@ elif st.session_state.state == "chatting":
 
     # Hiển thị lịch sử chat và placeholder cho "Bot đang suy nghĩ..."
     st.markdown("<div class='chat-history-area'>", unsafe_allow_html=True)
-    for idx, message in enumerate(st.session_state.messages):
-        # Đảm bảo tin nhắn chào mừng đầu tiên có sources
-        if idx == 0 and message["role"] == "assistant" and "sources" not in message:
-            message["sources"] = [{
-                "source": "Tin nhắn đầu tiên",
-                "chunk_id": "initial-message",
-                "content": "Đây là tin nhắn chào mừng, không có nguồn tham khảo cụ thể."
-            }]
-                
-        # Debug print cho mỗi message
-        print(f"\n=== DEBUG MESSAGE {idx} ===")
-        print(f"Role: {message.get('role')}")
-        print(f"Has sources: {'sources' in message}")
-        if 'sources' in message:
-            print(f"Sources length: {len(message['sources'])}")
-            if len(message['sources']) > 0:
-                print(f"First source: {message['sources'][0]}")
-        print(f"=== END DEBUG MESSAGE {idx} ===\n")
-        
+    for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-            
-            # Debug print để kiểm tra message
-            print(f"\n=== DEBUG UI MESSAGE ===")
-            print(f"Message role: {message.get('role')}")
-            print(f"Message keys: {message.keys()}")
-            print(f"'sources' in message: {'sources' in message}")
-            if 'sources' in message:
-                print(f"message['sources'] type: {type(message['sources'])}")
-                print(f"message['sources'] length: {len(message['sources']) if message['sources'] else 0}")
-                print(f"message['sources'] is empty or None: {not message['sources']}")
-            print(f"=== END DEBUG UI MESSAGE ===\n")
-            
-            # Luôn hiển thị phần nguồn cho tin nhắn của assistant
-            if message["role"] == "assistant":
-                st.markdown("**NGUỒN THAM KHẢO:**")
-                
-                # Đảm bảo luôn có nguồn, thêm nếu không có
-                if "sources" not in message or message["sources"] is None:
-                    message["sources"] = [{
-                        "source": "Tin nhắn hệ thống",
-                        "chunk_id": "system-message",
-                        "content": "Không có nguồn tham khảo cụ thể cho tin nhắn này."
-                    }]
-                    
-                elif not message["sources"] or len(message["sources"]) == 0:
-                    message["sources"] = [{
-                        "source": "Kết quả tìm kiếm",
-                        "chunk_id": "auto-generated",
-                        "content": "Hệ thống không tìm thấy nguồn tham khảo cụ thể cho câu hỏi này. Câu trả lời được tổng hợp từ kiến thức có sẵn."
-                    }]
-                
-                # Hiển thị thông tin về số lượng nguồn
-                st.info(f"Có {len(message['sources'])} nguồn được tìm thấy.")
-                
-                # Hiển thị các nguồn
-                for i, source in enumerate(message["sources"]):
-                    try:
-                        source_name = source.get('source', 'N/A')
-                        chunk_id = source.get('chunk_id', 'N/A')
-                        content = source.get('content', 'N/A')
-                        
-                        st.markdown(f"**Nguồn {i+1}:** {source_name} - Chunk ID: {chunk_id}")
-                        st.code(content[:150] + "..." if len(content) > 150 else content)
-                    except Exception as e:
-                        st.error(f"Lỗi khi hiển thị nguồn #{i+1}: {e}")
-                        st.text(f"Dữ liệu nguồn: {source}")
+            if message["role"] == "assistant" and "sources" in message and message["sources"]:
+                with st.expander("Xem nguồn tham khảo"):
+                    for i, source in enumerate(message["sources"]):
+                        st.caption(f"Nguồn {i+1} (Từ: {source.get('source', 'N/A')}, Chunk ID: {source.get('chunk_id', 'N/A')})")
+                        content_preview = source.get('content', '')[:300] + "..." if source.get('content') else "N/A"
+                        st.markdown(content_preview)
 
     # Simplified: Display "Bot đang suy nghĩ..." directly if bot is answering
     if st.session_state.bot_answering:
@@ -444,7 +336,7 @@ elif st.session_state.state == "chatting":
             
         llm = get_llm_instance()
         qa_chain = get_qa_retrieval_chain(llm, retriever_to_use)
-            
+        
         response_content = ""
         sources_list = []
         try:
@@ -461,150 +353,25 @@ elif st.session_state.state == "chatting":
                 # Placeholder sẽ tự động xóa ở rerun tiếp theo
                 st.rerun()
             else:
-                # Cập nhật: Sử dụng phương thức mới để gọi qa_chain
-                try:
-                    # Thử sử dụng phương thức invoke của LangChain mới
-                    from langchain_core.runnables.config import RunnableConfig
-                    response = qa_chain.invoke(
-                        {"query": last_user_msg_content},
-                        config=RunnableConfig(run_name="QA Query")
-                    )
-                except Exception as e1:
-                    print(f"[app] Lỗi khi sử dụng phương thức invoke: {e1}")
-                    # Fallback sang phương thức cũ nếu cần
-                    try:
-                        response = qa_chain({"query": last_user_msg_content})
-                    except Exception as e2:
-                        print(f"[app] Lỗi nghiêm trọng cả hai phương thức: {e2}")
-                        response = {
-                            "result": f"Có lỗi khi xử lý câu hỏi: {str(e2)}",
-                            "source_documents": []
-                        }
-                
-                # Debug print để kiểm tra dữ liệu trả về từ QA chain
-                print("\n\n=== DEBUG QA RESPONSE ===")
-                print(f"Response type: {type(response)}")
-                print(f"Response keys: {response.keys() if isinstance(response, dict) else 'Not a dict'}")
-                print(f"Has source_documents: {'source_documents' in response if isinstance(response, dict) else False}")
-                if isinstance(response, dict) and 'source_documents' in response:
-                    print(f"Number of source documents: {len(response['source_documents'])}")
-                    for i, doc in enumerate(response['source_documents']):
-                        print(f"Document {i+1}:")
-                        print(f"  Type: {type(doc)}")
-                        print(f"  Metadata: {doc.metadata}")
-                        print(f"  Page content length: {len(doc.page_content)}")
-                        print(f"  Content preview: {doc.page_content[:50]}...")
-                print("=== END DEBUG QA RESPONSE ===\n\n")
-                
-                # Trích xuất kết quả từ QA chain
-                if isinstance(response, dict):
-                    response_content = response.get("result", "")
-                    raw_sources = response.get("source_documents", [])
-                    
-                    # Luôn đảm bảo có ít nhất một nguồn để hiển thị
-                    sources_list = []
-                    if not raw_sources or len(raw_sources) == 0:
-                        print("[app] Warning: source_documents rỗng, thử tìm kiếm trực tiếp...")
-                        
-                        # Sử dụng tìm kiếm trực tiếp nếu không có kết quả từ retriever
-                        embedding_model = get_embedding_model()
-                        if embedding_model and st.session_state.session_id:
-                            direct_sources = direct_vector_search(last_user_msg_content, embedding_model, st.session_state.session_id, top_k=10)
-                            
-                            if direct_sources and len(direct_sources) > 0:
-                                print(f"[app] Tìm thấy {len(direct_sources)} nguồn từ tìm kiếm trực tiếp")
-                                raw_sources = direct_sources
-                                # Xử lý các nguồn tìm thấy
-                                for src in raw_sources:
-                                    try:
-                                        source_item = {
-                                            "source": src.metadata.get("source", "Tìm kiếm trực tiếp") if hasattr(src, "metadata") else "Tìm kiếm trực tiếp",
-                                            "chunk_id": src.metadata.get("chunk_id", "direct-search") if hasattr(src, "metadata") else "direct-search",
-                                            "content": src.page_content.replace("\\n", " ") if hasattr(src, "page_content") else "No content"
-                                        }
-                                        sources_list.append(source_item)
-                                        print(f"[app] Đã thêm nguồn trực tiếp: {source_item['source']}")
-                                    except Exception as e:
-                                        print(f"[app] Lỗi khi xử lý nguồn trực tiếp: {e}")
-                        
-                        # Nếu vẫn không có nguồn nào, tạo nguồn mặc định
-                        if not sources_list:
-                            print("[app] Không thể tìm thấy nguồn, tạo nguồn mặc định")
-                            sources_list = [{
-                                "source": "Kết quả tổng hợp",
-                                "chunk_id": "generated",
-                                "content": "Không tìm thấy nguồn tham khảo cụ thể. Câu trả lời được tổng hợp từ kiến thức chung."
-                            }]
-                    else:
-                        # Xử lý nguồn thường
-                        for src in raw_sources:
-                            try:
-                                source_item = {
-                                    "source": src.metadata.get("source", "N/A") if hasattr(src, "metadata") else "Unknown",
-                                    "chunk_id": src.metadata.get("chunk_id", "N/A") if hasattr(src, "metadata") else "unknown",
-                                    "content": src.page_content.replace("\\n", " ") if hasattr(src, "page_content") else "No content"
-                                }
-                                sources_list.append(source_item)
-                                print(f"[app] Đã thêm nguồn: {source_item['source']}")
-                            except Exception as e:
-                                print(f"[app] Lỗi khi xử lý nguồn: {e}")
-                                # Thêm nguồn lỗi để có thông tin debug
-                                sources_list.append({
-                                    "source": "Lỗi khi xử lý",
-                                    "chunk_id": "error",
-                                    "content": f"Đã xảy ra lỗi: {str(e)}"
-                                })
-                    
-                    # Đảm bảo luôn có ít nhất một nguồn
-                    if not sources_list:
-                        sources_list = [{
-                            "source": "Không có nguồn",
-                            "chunk_id": "empty",
-                            "content": "Không thể lấy thông tin nguồn từ câu trả lời."
-                        }]
-                    
-                    # Debug print để kiểm tra sources_list
-                    print("\n\n=== DEBUG SOURCES LIST ===")
-                    print(f"Number of sources after conversion: {len(sources_list)}")
-                    if len(sources_list) > 0:
-                        print(f"First source: {sources_list[0]}")
-                    print("=== END DEBUG SOURCES LIST ===\n\n")
-                else:
-                    # Phòng trường hợp không phải dict
-                    response_content = str(response)
-                    sources_list = [{
-                        "source": "Lỗi định dạng",
-                        "chunk_id": "format-error",
-                        "content": "Kết quả trả về không đúng định dạng. Vui lòng liên hệ quản trị viên."
-                    }]
+                response = qa_chain.invoke({"query": last_user_msg_content})
+                response_content = response.get("result", "Xin lỗi, tôi không tìm thấy câu trả lời.")
+                sources = response.get("source_documents", [])
+                for src in sources:
+                    sources_list.append({
+                        "source": src.metadata.get("source", "N/A"),
+                        "chunk_id": src.metadata.get("chunk_id", "N/A"),
+                        "content": src.page_content.replace("\\n", " ")
+                    })
         except Exception as e:
             response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
         
-        # Debug print để kiểm tra message trước khi thêm vào st.session_state.messages
-        print("\n\n=== DEBUG FINAL MESSAGE ===")
-        print(f"Response content length: {len(response_content)}")
-        print(f"Sources list length: {len(sources_list)}")
-        message_to_append = {"role": "assistant", "content": response_content, "sources": sources_list}
-        print(f"Message to append has sources: {'sources' in message_to_append}")
-        print(f"Message sources length: {len(message_to_append['sources'])}")
-        print("=== END DEBUG FINAL MESSAGE ===\n\n")
+        # Tin nhắn "Bot đang suy nghĩ..." đã được hiển thị và sẽ tự động biến mất
+        # khi rerun với bot_answering = False
         
-        st.session_state.messages.append(message_to_append)
+        st.session_state.messages.append({"role": "assistant", "content": response_content, "sources": sources_list})
         save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
         st.session_state.bot_answering = False
         st.rerun()
-
-    # Mới thêm: Kiểm tra và đảm bảo tất cả tin nhắn đều có nguồn (để lưu đúng khi save_chat_history)
-    for i, msg in enumerate(st.session_state.messages):
-        if msg["role"] == "assistant" and ("sources" not in msg or not msg["sources"]):
-            print(f"[app] Fix missing sources in message #{i}")
-            # Tin nhắn assistant không có nguồn, thêm nguồn mặc định
-            msg["sources"] = [{
-                "source": "Hệ thống",
-                "chunk_id": "auto-fixed",
-                "content": "Không có nguồn tham khảo cụ thể. Đã tự động thêm."
-            }]
-
 else:
     st.error("Trạng thái không xác định. Đang reset về trang chủ.")
     reset_to_upload()
