@@ -267,30 +267,12 @@ elif st.session_state.state == "chatting":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message["role"] == "assistant" and "sources" in message and message["sources"]:
-                # Hiển thị nguồn trực tiếp thay vì trong expander
-                st.markdown("**Nguồn tham khảo:**")
-                for i, source in enumerate(message["sources"][:2]):  # Chỉ hiển thị 2 nguồn quan trọng nhất
-                    if isinstance(source, dict):  # Nguồn dạng cũ
-                        st.caption(f"Nguồn {i+1} (Từ: {source.get('source', 'N/A')})")
+                # Hiển thị tất cả nguồn tham khảo trong expander
+                with st.expander("Xem nguồn tham khảo"):
+                    for i, source in enumerate(message["sources"]):
+                        st.caption(f"Nguồn {i+1} (Từ: {source.get('source', 'N/A')}, Chunk ID: {source.get('chunk_id', 'N/A')})")
                         content_preview = source.get('content', '')[:200] + "..." if len(source.get('content', '')) > 200 else source.get('content', 'N/A')
                         st.markdown(f"```\n{content_preview}\n```")
-                    else:  # Nguồn dạng mới là Document object trực tiếp
-                        st.caption(f"Nguồn {i+1} (Từ: {source.metadata.get('source', 'N/A')})")
-                        content_preview = source.page_content[:200] + "..." if len(source.page_content) > 200 else source.page_content
-                        st.markdown(f"```\n{content_preview}\n```")
-                
-                # Các nguồn còn lại đưa vào expander
-                if len(message["sources"]) > 2:
-                    with st.expander("Xem thêm nguồn tham khảo"):
-                        for i, source in enumerate(message["sources"][2:]):
-                            if isinstance(source, dict):  # Nguồn dạng cũ
-                                st.caption(f"Nguồn {i+3} (Từ: {source.get('source', 'N/A')}, Chunk ID: {source.get('chunk_id', 'N/A')})")
-                                content_preview = source.get('content', '')[:200] + "..." if len(source.get('content', '')) > 200 else source.get('content', 'N/A')
-                                st.markdown(f"```\n{content_preview}\n```")
-                            else:  # Nguồn dạng mới là Document object trực tiếp
-                                st.caption(f"Nguồn {i+3} (Từ: {source.metadata.get('source', 'N/A')})")
-                                content_preview = source.page_content[:200] + "..." if len(source.page_content) > 200 else source.page_content
-                                st.markdown(f"```\n{content_preview}\n```")
 
     # Simplified: Display "Bot đang suy nghĩ..." directly if bot is answering
     if st.session_state.bot_answering:
@@ -377,9 +359,22 @@ elif st.session_state.state == "chatting":
                 # Placeholder sẽ tự động xóa ở rerun tiếp theo
                 st.rerun()
             else:
-                result = qa_chain({"query": last_user_msg_content})
-                response_content = result.get("result", "")
-                sources_list = result.get("source_documents", [])
+                response = qa_chain({"query": last_user_msg_content})
+                # Trích xuất kết quả từ QA chain
+                if isinstance(response, dict):
+                    response_content = response.get("result", "")
+                    raw_sources = response.get("source_documents", [])
+                    sources_list = []
+                    for src in raw_sources:
+                        sources_list.append({
+                            "source": src.metadata.get("source", "N/A"),
+                            "chunk_id": src.metadata.get("chunk_id", "N/A"),
+                            "content": src.page_content.replace("\\n", " ")
+                        })
+                else:
+                    # Phòng trường hợp không phải dict
+                    response_content = str(response)
+                    sources_list = []
         except Exception as e:
             response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
         
