@@ -2,8 +2,15 @@ streamlit
 langchain
 langchain-community
 langchain-huggingface
+langchain-cohere
 faiss-cpu
+faiss-gpu
 PyPDF2
 python-dotenv
 torch
-transformers 
+transformers
+rank_bm25
+sentence-transformers
+langchain-core
+python-docx
+ollama
