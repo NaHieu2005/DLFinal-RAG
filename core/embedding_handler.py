@@ -6,12 +6,9 @@ from langchain.storage import InMemoryStore
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import streamlit as st
 import os
-import hashlib
 import pickle
 from config import embedding_model_name, VECTOR_STORES_DIR, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, EMBEDDING_DEVICE
 import time
-import torch
-import numpy as np
 
 # Cache để không phải tạo lại embedding model mỗi lần
 @st.cache_resource

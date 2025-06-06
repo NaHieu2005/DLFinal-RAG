@@ -263,16 +263,55 @@ elif st.session_state.state == "chatting":
 
     # Hiển thị lịch sử chat và placeholder cho "Bot đang suy nghĩ..."
     st.markdown("<div class='chat-history-area'>", unsafe_allow_html=True)
-    for message in st.session_state.messages:
+    for idx, message in enumerate(st.session_state.messages):
+        # Debug print cho mỗi message
+        print(f"\n=== DEBUG MESSAGE {idx} ===")
+        print(f"Role: {message.get('role')}")
+        print(f"Has sources: {'sources' in message}")
+        if 'sources' in message:
+            print(f"Sources length: {len(message['sources'])}")
+            if len(message['sources']) > 0:
+                print(f"First source: {message['sources'][0]}")
+        print(f"=== END DEBUG MESSAGE {idx} ===\n")
+        
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-            if message["role"] == "assistant" and "sources" in message and message["sources"]:
-                # Hiển thị tất cả nguồn tham khảo trong expander
-                with st.expander("Xem nguồn tham khảo"):
+            
+            # Debug print để kiểm tra message
+            print(f"\n=== DEBUG UI MESSAGE ===")
+            print(f"Message role: {message.get('role')}")
+            print(f"Message keys: {message.keys()}")
+            print(f"'sources' in message: {'sources' in message}")
+            if 'sources' in message:
+                print(f"message['sources'] type: {type(message['sources'])}")
+                print(f"message['sources'] length: {len(message['sources']) if message['sources'] else 0}")
+                print(f"message['sources'] is empty or None: {not message['sources']}")
+            print(f"=== END DEBUG UI MESSAGE ===\n")
+            
+            # Luôn hiển thị phần nguồn cho tin nhắn của assistant
+            if message["role"] == "assistant":
+                st.markdown("**NGUỒN THAM KHẢO:**")
+                
+                if "sources" not in message:
+                    st.warning("Tin nhắn này không có thông tin nguồn tham khảo.")
+                    
+                elif not message["sources"]:
+                    st.warning("Không tìm thấy nguồn tham khảo cho tin nhắn này.")
+                    
+                else:
+                    st.success(f"Có {len(message['sources'])} nguồn được tìm thấy.")
+                    
                     for i, source in enumerate(message["sources"]):
-                        st.caption(f"Nguồn {i+1} (Từ: {source.get('source', 'N/A')}, Chunk ID: {source.get('chunk_id', 'N/A')})")
-                        content_preview = source.get('content', '')[:200] + "..." if len(source.get('content', '')) > 200 else source.get('content', 'N/A')
-                        st.markdown(f"```\n{content_preview}\n```")
+                        try:
+                            source_name = source.get('source', 'N/A')
+                            chunk_id = source.get('chunk_id', 'N/A')
+                            content = source.get('content', 'N/A')
+                            
+                            st.markdown(f"**Nguồn {i+1}:** {source_name} - Chunk ID: {chunk_id}")
+                            st.code(content[:150] + "..." if len(content) > 150 else content)
+                        except Exception as e:
+                            st.error(f"Lỗi khi hiển thị nguồn #{i+1}: {e}")
+                            st.text(f"Dữ liệu nguồn: {source}")
 
     # Simplified: Display "Bot đang suy nghĩ..." directly if bot is answering
     if st.session_state.bot_answering:
@@ -360,6 +399,19 @@ elif st.session_state.state == "chatting":
                 st.rerun()
             else:
                 response = qa_chain({"query": last_user_msg_content})
+                # Debug print để kiểm tra dữ liệu trả về từ QA chain
+                print("\n\n=== DEBUG QA RESPONSE ===")
+                print(f"Response type: {type(response)}")
+                print(f"Response keys: {response.keys() if isinstance(response, dict) else 'Not a dict'}")
+                print(f"Has source_documents: {'source_documents' in response if isinstance(response, dict) else False}")
+                if isinstance(response, dict) and 'source_documents' in response:
+                    print(f"Number of source documents: {len(response['source_documents'])}")
+                    if len(response['source_documents']) > 0:
+                        first_doc = response['source_documents'][0]
+                        print(f"First doc type: {type(first_doc)}")
+                        print(f"First doc metadata: {first_doc.metadata if hasattr(first_doc, 'metadata') else 'No metadata'}")
+                print("=== END DEBUG QA RESPONSE ===\n\n")
+                
                 # Trích xuất kết quả từ QA chain
                 if isinstance(response, dict):
                     response_content = response.get("result", "")
@@ -371,6 +423,13 @@ elif st.session_state.state == "chatting":
                             "chunk_id": src.metadata.get("chunk_id", "N/A"),
                             "content": src.page_content.replace("\\n", " ")
                         })
+                    
+                    # Debug print để kiểm tra sources_list trước khi đính kèm vào tin nhắn
+                    print("\n\n=== DEBUG SOURCES LIST ===")
+                    print(f"Number of sources after conversion: {len(sources_list)}")
+                    if len(sources_list) > 0:
+                        print(f"First source: {sources_list[0]}")
+                    print("=== END DEBUG SOURCES LIST ===\n\n")
                 else:
                     # Phòng trường hợp không phải dict
                     response_content = str(response)
@@ -378,7 +437,16 @@ elif st.session_state.state == "chatting":
         except Exception as e:
             response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
         
-        st.session_state.messages.append({"role": "assistant", "content": response_content, "sources": sources_list})
+        # Debug print để kiểm tra message trước khi thêm vào st.session_state.messages
+        print("\n\n=== DEBUG FINAL MESSAGE ===")
+        print(f"Response content length: {len(response_content)}")
+        print(f"Sources list length: {len(sources_list)}")
+        message_to_append = {"role": "assistant", "content": response_content, "sources": sources_list}
+        print(f"Message to append has sources: {'sources' in message_to_append}")
+        print(f"Message sources length: {len(message_to_append['sources'])}")
+        print("=== END DEBUG FINAL MESSAGE ===\n\n")
+        
+        st.session_state.messages.append(message_to_append)
         save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
         st.session_state.bot_answering = False
         st.rerun()

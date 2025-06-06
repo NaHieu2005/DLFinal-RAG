@@ -22,6 +22,15 @@ def save_chat_history(session_id, messages_list, display_name_to_set=None):
     # Ưu tiên display_name mới nếu được cung cấp, nếu không dùng cái hiện tại (hoặc session_id)
     final_display_name = display_name_to_set if display_name_to_set is not None else current_display_name
     
+    # Debug: Kiểm tra nguồn trước khi lưu
+    for idx, msg in enumerate(messages_list):
+        if msg.get("role") == "assistant" and "sources" in msg:
+            print(f"\n=== DEBUG SAVE SOURCES MSG #{idx} ===")
+            print(f"Number of sources before saving: {len(msg['sources'])}")
+            if len(msg['sources']) > 0:
+                print(f"First source before saving: {msg['sources'][0]}")
+            print("=== END DEBUG SAVE SOURCES ===\n")
+
     chat_data_to_save = {
         "display_name": final_display_name,
         "messages": messages_list
@@ -54,6 +63,16 @@ def load_chat_history(session_id):
         if isinstance(data, dict):
             messages = data.get("messages", [])
             display_name = data.get("display_name", session_id) # Mặc định là session_id nếu không có
+            
+            # Debug: Kiểm tra nguồn sau khi tải
+            for idx, msg in enumerate(messages):
+                if msg.get("role") == "assistant" and "sources" in msg:
+                    print(f"\n=== DEBUG LOAD SOURCES MSG #{idx} ===")
+                    print(f"Number of sources after loading: {len(msg['sources'])}")
+                    if len(msg['sources']) > 0:
+                        print(f"First source after loading: {msg['sources'][0]}")
+                    print("=== END DEBUG LOAD SOURCES ===\n")
+                    
             return messages, display_name
         elif isinstance(data, list): # Xử lý trường hợp file cũ chỉ chứa list messages
             return data, session_id
