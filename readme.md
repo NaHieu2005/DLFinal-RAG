@@ -43,7 +43,7 @@ RAG (Retrieval Augmented Generation) là kỹ thuật kết hợp tìm kiếm th
 
 1. Clone repository:
 ```bash
-git clone https://github.com/yourusername/DLFinal-RAG.git
+git clone https://github.com/NaHieu2005/DLFinal-RAG.git
 cd DLFinal-RAG
 ```
 
