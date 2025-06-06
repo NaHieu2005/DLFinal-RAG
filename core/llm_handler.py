@@ -130,10 +130,24 @@ Câu trả lời hữu ích:"""
         # Kiểm tra xem retriever có tìm thấy kết quả không
         print("[llm_handler] Kiểm tra retriever có tìm thấy kết quả...")
         try:
-            test_results = retriever.get_relevant_documents("test query")
+            # Sử dụng phương thức mới .invoke thay vì .get_relevant_documents đã bị deprecate
+            from langchain_core.runnables.config import RunnableConfig
+            test_results = retriever.invoke("test query", config=RunnableConfig(run_name="Test Query"))
             print(f"[llm_handler] Retriever tìm thấy {len(test_results)} kết quả trong kiểm tra")
+            
+            # Nếu không tìm thấy kết quả, đảm bảo retriever vẫn hoạt động
+            if len(test_results) == 0:
+                print("[llm_handler] Cảnh báo: Không tìm thấy kết quả trong test query")
         except Exception as e:
-            print(f"[llm_handler] Lỗi khi test retriever: {e}")
+            print(f"[llm_handler] Lỗi khi test retriever với invoke: {e}")
+            # Dùng phương thức cũ nếu phương thức mới fails
+            try:
+                if hasattr(retriever, 'get_relevant_documents'):
+                    print("[llm_handler] Thử lại với get_relevant_documents...")
+                    test_results = retriever.get_relevant_documents("test query")
+                    print(f"[llm_handler] Retriever tìm thấy {len(test_results)} kết quả trong kiểm tra")
+            except Exception as e2:
+                print(f"[llm_handler] Tiếp tục lỗi khi test retriever: {e2}")
         
         # Khởi tạo chain tiêu chuẩn
         qa_chain = RetrievalQA.from_chain_type(

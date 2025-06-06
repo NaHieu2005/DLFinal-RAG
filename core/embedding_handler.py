@@ -161,11 +161,11 @@ def create_advanced_retriever(parent_chunks, child_chunks, embedding_model_insta
     
     # Khởi tạo BM25Retriever cho child chunks
     bm25_retriever = BM25Retriever.from_documents(child_chunks)
-    bm25_retriever.k = 5  # Số lượng kết quả trả về
+    bm25_retriever.k = 10  # Tăng số lượng kết quả trả về
     
     # Khởi tạo FAISS vector store cho child chunks
     vectorstore = FAISS.from_documents(child_chunks, embedding_model_instance)
-    faiss_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    faiss_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})  # Tăng k lên 10
     
     # Hybrid retriever kết hợp BM25 và FAISS với trọng số ngang nhau
     ensemble_retriever = EnsembleRetriever(
@@ -179,23 +179,33 @@ def create_advanced_retriever(parent_chunks, child_chunks, embedding_model_insta
         chunk_overlap=CHILD_CHUNK_OVERLAP
     )
     
-    # Khởi tạo ParentDocumentRetriever
-    parent_retriever = ParentDocumentRetriever(
-        vectorstore=vectorstore,  # Sử dụng vectorstore cho child chunks
-        docstore=docstore,  # Lưu trữ parent chunks
-        child_splitter=child_splitter,  # Bắt buộc phải có
-        search_kwargs={"k": 5},
-        child_ids_key="parent_id"  # Khóa liên kết giữa child và parent
-    )
-    
-    # Thêm parent documents vào docstore
+    # Thêm parent documents vào docstore TRƯỚC khi khởi tạo ParentDocumentRetriever
     for p_doc in parent_chunks:
         if "parent_id" in p_doc.metadata:
             docstore.mset([(p_doc.metadata["parent_id"], p_doc)])
     
-    print(f"[embedding_handler] Đã khởi tạo advanced retriever với {len(parent_chunks)} parent chunks và {len(child_chunks)} child chunks.")
-    
-    return parent_retriever, vectorstore
+    # Khởi tạo ParentDocumentRetriever
+    try:
+        # Tăng search_kwargs để tìm thấy nhiều kết quả hơn
+        parent_retriever = ParentDocumentRetriever(
+            vectorstore=vectorstore,  # Sử dụng vectorstore cho child chunks
+            docstore=docstore,  # Lưu trữ parent chunks
+            child_splitter=child_splitter,  # Bắt buộc phải có
+            search_kwargs={"k": 15},  # Tăng k để đảm bảo tìm thấy kết quả
+            child_ids_key="parent_id"  # Khóa liên kết giữa child và parent
+        )
+        
+        # Patch phương thức invoke nếu cần
+        parent_retriever = patch_retriever_invoke(parent_retriever)
+        
+        # Fallback nếu ParentDocumentRetriever gặp vấn đề
+        print(f"[embedding_handler] Đã khởi tạo advanced retriever với {len(parent_chunks)} parent chunks và {len(child_chunks)} child chunks.")
+        return parent_retriever, vectorstore
+    except Exception as e:
+        print(f"[embedding_handler] Lỗi khi tạo ParentDocumentRetriever: {e}")
+        print(f"[embedding_handler] Sử dụng simple retriever thay thế")
+        # Trả về FAISS retriever đơn giản nếu gặp lỗi
+        return faiss_retriever, vectorstore
 
 def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     """
@@ -221,7 +231,8 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
         print(f"[embedding_handler] Kiểm tra VS path: {os.path.exists(vs_path)}, Parent path: {os.path.exists(parent_path)}")
         
         # Fallback to simple retriever
-        return vectorstore.as_retriever(search_kwargs={"k": 5})
+        simple_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+        return patch_retriever_invoke(simple_retriever)
     
     # Khởi tạo docstore và điền parent documents
     docstore = InMemoryStore()
@@ -236,7 +247,8 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     
     if valid_parents == 0:
         print(f"[embedding_handler] Không có parent chunk nào có parent_id hợp lệ. Sẽ sử dụng retriever đơn giản.")
-        return vectorstore.as_retriever(search_kwargs={"k": 5})
+        simple_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+        return patch_retriever_invoke(simple_retriever)
     
     # Tạo child_splitter là bắt buộc cho ParentDocumentRetriever
     child_splitter = RecursiveCharacterTextSplitter(
@@ -253,6 +265,10 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
             search_kwargs={"k": 5},
             child_ids_key="parent_id"
         )
+        
+        # Patch phương thức invoke nếu cần
+        parent_retriever = patch_retriever_invoke(parent_retriever)
+        
         print(f"[embedding_handler] Đã tái tạo thành công ParentDocumentRetriever với {valid_parents}/{len(parent_chunks)} parent chunks")
         return parent_retriever
     except Exception as e:
@@ -322,5 +338,23 @@ def get_or_create_vector_store(p_session_id, documents_info, embedding_model_ins
     else:
         print(f"[embedding_handler] documents_info không phải tuple (parent_chunks, child_chunks) hoặc list documents. Kiểu dữ liệu: {type(documents_info)}")
         return None, None
+
+# Patch function that can be reused
+def patch_retriever_invoke(retriever):
+    """Thêm phương thức invoke cho retriever nếu chưa có."""
+    if not hasattr(retriever, 'invoke') or callable(getattr(retriever, 'invoke', None)) is False:
+        print("[embedding_handler] Patch phương thức invoke cho retriever")
+        
+        def patched_invoke(self, query, *args, **kwargs):
+            if hasattr(self, 'get_relevant_documents'):
+                return self.get_relevant_documents(query)
+            else:
+                print("[embedding_handler] Lỗi: Không tìm thấy phương thức get_relevant_documents")
+                return []
+                
+        import types
+        retriever.invoke = types.MethodType(patched_invoke, retriever)
+    
+    return retriever
 
 # (Code for get_vector_store, save_vector_store, load_vector_store will go here) 
