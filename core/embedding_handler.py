@@ -8,17 +8,19 @@ import streamlit as st
 import os
 import hashlib
 import pickle
-from config import embedding_model_name, VECTOR_STORES_DIR, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP
+from config import embedding_model_name, VECTOR_STORES_DIR, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, EMBEDDING_DEVICE
 import time
+import torch
+import numpy as np
 
 # Cache để không phải tạo lại embedding model mỗi lần
 @st.cache_resource
 def get_embedding_model():
     try:
-        print("[embedding_handler] Bắt đầu khởi tạo HuggingFaceEmbeddings...")
+        print(f"[embedding_handler] Bắt đầu khởi tạo HuggingFaceEmbeddings với device={EMBEDDING_DEVICE}...")
         return HuggingFaceEmbeddings(
             model_name=embedding_model_name,
-            model_kwargs={'device': 'cpu'} # Sửa thành 'cpu' để tránh lỗi CUDA
+            model_kwargs={'device': EMBEDDING_DEVICE}
         )
     except Exception as e:
         print(f"[embedding_handler] Lỗi khi tải embedding model: {e}")
@@ -30,6 +32,27 @@ def generate_session_id(file_names):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     return f"{base}_{timestamp}"
 
+# Hàm mới cho phép tạo embeddings theo batch để tăng tốc 
+@st.cache_data(ttl=3600)  # Cache kết quả embedding với thời hạn 1 giờ
+def create_embeddings_in_batches(texts, embedding_model, batch_size=32):
+    """Tạo embeddings theo batch để tăng hiệu suất."""
+    print(f"[embedding_handler] Tạo embeddings cho {len(texts)} văn bản theo batch_size={batch_size}")
+    
+    all_embeddings = []
+    total_batches = (len(texts) + batch_size - 1) // batch_size
+    
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i:i+batch_size]
+        batch_embeddings = embedding_model.embed_documents(batch_texts)
+        all_embeddings.extend(batch_embeddings)
+        
+        # Cập nhật tiến độ
+        if i % (batch_size * 10) == 0 or i + batch_size >= len(texts):
+            current_batch = (i + batch_size) // batch_size
+            print(f"[embedding_handler] Đang tạo embeddings: {current_batch}/{total_batches} batches xong ({(current_batch/total_batches)*100:.1f}%)")
+    
+    return all_embeddings
+
 # Cache để không phải tạo lại vector store mỗi lần tương tác cho cùng một bộ tài liệu
 # Lưu ý: _documents và _embedding_model_name giờ đây nên được thay thế bằng một ID định danh cho bộ tài liệu đó
 # Tuy nhiên, vì chúng ta sẽ lưu và tải vector store, việc cache get_vector_store có thể không còn quá quan trọng
@@ -39,7 +62,19 @@ def create_vector_store_from_documents(_documents, _embedding_model_instance):
     print("[embedding_handler] Bắt đầu tạo vector store từ documents (không cache resource)...")
     if _documents and _embedding_model_instance:
         try:
-            vector_store_instance = FAISS.from_documents(_documents, _embedding_model_instance)
+            # Tách texts và metadatas
+            texts = [doc.page_content for doc in _documents]
+            metadatas = [doc.metadata for doc in _documents]
+            
+            # Tạo embeddings theo batch
+            embeddings = create_embeddings_in_batches(texts, _embedding_model_instance)
+            
+            # Tạo vector store từ embeddings đã tính toán trước
+            vector_store_instance = FAISS.from_embeddings(
+                text_embeddings=list(zip(texts, embeddings)),
+                embedding=_embedding_model_instance,
+                metadatas=metadatas
+            )
             print("[embedding_handler] Đã tạo xong vector store.")
             return vector_store_instance
         except Exception as e:
@@ -183,13 +218,28 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     if not parent_chunks:
         print(f"[embedding_handler] Không thể tải parent chunks cho session: {vs_id}")
         print(f"[embedding_handler] Sẽ sử dụng retriever đơn giản thay thế.")
+        # Log chi tiết để dễ debug
+        vs_path = os.path.join(VECTOR_STORES_DIR, vs_id)
+        parent_path = os.path.join(VECTOR_STORES_DIR, vs_id, "parent_chunks.pkl")
+        print(f"[embedding_handler] Kiểm tra VS path: {os.path.exists(vs_path)}, Parent path: {os.path.exists(parent_path)}")
+        
+        # Fallback to simple retriever
         return vectorstore.as_retriever(search_kwargs={"k": 5})
     
     # Khởi tạo docstore và điền parent documents
     docstore = InMemoryStore()
+    valid_parents = 0
+    
     for p_doc in parent_chunks:
         if "parent_id" in p_doc.metadata:
             docstore.mset([(p_doc.metadata["parent_id"], p_doc)])
+            valid_parents += 1
+        else:
+            print(f"[embedding_handler] Cảnh báo: Tìm thấy parent chunk không có parent_id trong metadata")
+    
+    if valid_parents == 0:
+        print(f"[embedding_handler] Không có parent chunk nào có parent_id hợp lệ. Sẽ sử dụng retriever đơn giản.")
+        return vectorstore.as_retriever(search_kwargs={"k": 5})
     
     # Tạo child_splitter là bắt buộc cho ParentDocumentRetriever
     child_splitter = RecursiveCharacterTextSplitter(
@@ -206,7 +256,7 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
             search_kwargs={"k": 5},
             child_ids_key="parent_id"
         )
-        print(f"[embedding_handler] Đã tái tạo thành công ParentDocumentRetriever với {len(parent_chunks)} parent chunks")
+        print(f"[embedding_handler] Đã tái tạo thành công ParentDocumentRetriever với {valid_parents}/{len(parent_chunks)} parent chunks")
         return parent_retriever
     except Exception as e:
         print(f"[embedding_handler] Lỗi khi tái tạo ParentDocumentRetriever: {e}")
@@ -233,6 +283,11 @@ def get_or_create_vector_store(p_session_id, documents_info, embedding_model_ins
         return retriever, vs_id
     
     # Kiểm tra định dạng của documents_info
+    if documents_info is None:
+        print(f"[embedding_handler] documents_info là None, không thể tạo vector store mới cho ID: {vs_id}")
+        return None, None
+
+    # Xử lý định dạng parent-child
     if isinstance(documents_info, tuple) and len(documents_info) == 2:
         parent_chunks, child_chunks = documents_info
         if parent_chunks and child_chunks:
@@ -252,17 +307,23 @@ def get_or_create_vector_store(p_session_id, documents_info, embedding_model_ins
             
             # Trả về parent_retriever để sử dụng cho Parent Document Retrieval
             return parent_retriever, vs_id
-    else:
-        # Xử lý trường hợp documents truyền thống (để tương thích ngược)
+        else:
+            print(f"[embedding_handler] parent_chunks hoặc child_chunks rỗng cho ID: {vs_id}")
+            return None, None
+    # Xử lý định dạng tài liệu truyền thống
+    elif isinstance(documents_info, list):
         documents = documents_info
         if documents:
             print(f"[embedding_handler] Đang tạo vector store thông thường cho ID: {vs_id}...")
-            vector_store = FAISS.from_documents(documents, embedding_model_instance)
+            vector_store = create_vector_store_from_documents(documents, embedding_model_instance)
             if vector_store and save:
                 save_vector_store(vector_store, vs_id)
-            return vector_store, vs_id
-    
-    print(f"[embedding_handler] Không thể tạo vector store cho ID: {vs_id}")
-    return None, None
+            return vector_store.as_retriever(), vs_id
+        else:
+            print(f"[embedding_handler] documents là list rỗng cho ID: {vs_id}")
+            return None, None
+    else:
+        print(f"[embedding_handler] documents_info không phải tuple (parent_chunks, child_chunks) hoặc list documents. Kiểu dữ liệu: {type(documents_info)}")
+        return None, None
 
 # (Code for get_vector_store, save_vector_store, load_vector_store will go here) 

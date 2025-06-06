@@ -1,5 +1,14 @@
 # Vietnamese RAG Chatbot
 
+Dự án này là thành quả của nhóm trong bài tập lớn môn Deep Learning (2425II_AIT3001*_1). Nhóm xin gửi lời cảm ơn chân thành đến thầy Triệu Hải Long đã tận tình hướng dẫn, đồng hành với chúng em trong suốt quá trình thực hiện dự án.
+
+Thành viên nhóm:
+
+Lê Vũ Hiếu - 23020365
+
+Đàm Lê Minh Quân - 23020416
+
+Nguyễn HoàngTú - 23020428
 
 
 Hệ thống RAG (Retrieval Augmented Generation) nâng cao cho tài liệu Tiếng Việt sử dụng Llama 3, LangChain và Streamlit.
@@ -15,7 +24,7 @@ RAG (Retrieval Augmented Generation) là kỹ thuật kết hợp tìm kiếm th
 
 ## Tính năng nâng cao
 
-Ứng dụng này sử dụng các kỹ thuật RAG nâng cao:
+Ứng dụng này sử dụng các kỹ thuật cải tiến:
 
 1. **Parent-Child Document Chunking**: Tạo các chunk cha lớn (để truy xuất và hiểu ngữ cảnh rộng) và chunk con nhỏ (để tìm kiếm chính xác)
 2. **Hybrid Search**: Kết hợp BM25 (từ khóa) và Embedding Search (ngữ nghĩa) để cải thiện kết quả tìm kiếm 

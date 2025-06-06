@@ -2,12 +2,20 @@ import streamlit as st
 from ui.sidebar import sidebar
 from ui.chat_interface import file_upload_screen, processing_screen, chat_screen
 from core.document_processor import process_uploaded_files
-from core.embedding_handler import get_embedding_model, get_or_create_vector_store, generate_session_id, recreate_retriever_from_saved
+from core.embedding_handler import (
+    get_embedding_model, 
+    get_or_create_vector_store, 
+    generate_session_id,
+    recreate_retriever_from_saved
+)
 from core.llm_handler import get_llm_instance, get_qa_retrieval_chain, get_reranker
-from core.chat_history import save_chat_history, load_chat_history
+from core.chat_history import save_chat_history, load_chat_history, list_chat_sessions
+from config import CHAT_HISTORIES_DIR, VECTOR_STORES_DIR
 import os
 import shutil
-from config import CHAT_HISTORIES_DIR, VECTOR_STORES_DIR
+import uuid
+import json
+from datetime import datetime
 
 st.set_page_config(page_title="Chatbot Tài Liệu RAG", layout="wide")
 
@@ -24,7 +32,7 @@ with st.sidebar:
 # --- Session State ---
 def reset_to_upload():
     keys_to_reset = [
-        "uploaded_files", "vector_store", "session_id", 
+        "uploaded_files", "vector_store", "retriever", "session_id", 
         "file_names", "messages", "current_session_display_name"
     ]
     for key in keys_to_reset:
@@ -33,11 +41,22 @@ def reset_to_upload():
     st.session_state.processing = False
     st.session_state.bot_answering = False
     st.session_state.messages = [] # Đảm bảo messages là list rỗng
+    clear_memory() # Gọi hàm mới để giải phóng bộ nhớ
 
-def reset_to_chat(): # Hàm này có thể không cần thiết nữa nếu logic được đặt đúng chỗ
-    st.session_state.state = "chatting"
-    st.session_state.processing = False
-    st.session_state.bot_answering = False
+# Hàm mới để giải phóng bộ nhớ
+def clear_memory():
+    """Giải phóng bộ nhớ bằng cách xóa các đối tượng lớn khỏi session_state"""
+    import gc
+    
+    # Hủy bỏ các đối tượng lớn
+    if "retriever" in st.session_state:
+        st.session_state.retriever = None
+    if "vector_store" in st.session_state:
+        st.session_state.vector_store = None
+        
+    # Buộc garbage collector thu hồi bộ nhớ
+    gc.collect()
+    print("[app] Đã giải phóng bộ nhớ không cần thiết")
 
 # Khởi tạo session_state nếu chưa có
 default_states = {
@@ -248,11 +267,30 @@ elif st.session_state.state == "chatting":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message["role"] == "assistant" and "sources" in message and message["sources"]:
-                with st.expander("Xem nguồn tham khảo"):
-                    for i, source in enumerate(message["sources"]):
-                        st.caption(f"Nguồn {i+1} (Từ: {source.get('source', 'N/A')}, Chunk ID: {source.get('chunk_id', 'N/A')})")
-                        content_preview = source.get('content', '')[:300] + "..." if source.get('content') else "N/A"
-                        st.markdown(content_preview)
+                # Hiển thị nguồn trực tiếp thay vì trong expander
+                st.markdown("**Nguồn tham khảo:**")
+                for i, source in enumerate(message["sources"][:2]):  # Chỉ hiển thị 2 nguồn quan trọng nhất
+                    if isinstance(source, dict):  # Nguồn dạng cũ
+                        st.caption(f"Nguồn {i+1} (Từ: {source.get('source', 'N/A')})")
+                        content_preview = source.get('content', '')[:200] + "..." if len(source.get('content', '')) > 200 else source.get('content', 'N/A')
+                        st.markdown(f"```\n{content_preview}\n```")
+                    else:  # Nguồn dạng mới là Document object trực tiếp
+                        st.caption(f"Nguồn {i+1} (Từ: {source.metadata.get('source', 'N/A')})")
+                        content_preview = source.page_content[:200] + "..." if len(source.page_content) > 200 else source.page_content
+                        st.markdown(f"```\n{content_preview}\n```")
+                
+                # Các nguồn còn lại đưa vào expander
+                if len(message["sources"]) > 2:
+                    with st.expander("Xem thêm nguồn tham khảo"):
+                        for i, source in enumerate(message["sources"][2:]):
+                            if isinstance(source, dict):  # Nguồn dạng cũ
+                                st.caption(f"Nguồn {i+3} (Từ: {source.get('source', 'N/A')}, Chunk ID: {source.get('chunk_id', 'N/A')})")
+                                content_preview = source.get('content', '')[:200] + "..." if len(source.get('content', '')) > 200 else source.get('content', 'N/A')
+                                st.markdown(f"```\n{content_preview}\n```")
+                            else:  # Nguồn dạng mới là Document object trực tiếp
+                                st.caption(f"Nguồn {i+3} (Từ: {source.metadata.get('source', 'N/A')})")
+                                content_preview = source.page_content[:200] + "..." if len(source.page_content) > 200 else source.page_content
+                                st.markdown(f"```\n{content_preview}\n```")
 
     # Simplified: Display "Bot đang suy nghĩ..." directly if bot is answering
     if st.session_state.bot_answering:
@@ -339,29 +377,17 @@ elif st.session_state.state == "chatting":
                 # Placeholder sẽ tự động xóa ở rerun tiếp theo
                 st.rerun()
             else:
-                response = qa_chain.invoke({"query": last_user_msg_content})
-                response_content = response.get("result", "Xin lỗi, tôi không tìm thấy câu trả lời.")
-                sources = response.get("source_documents", [])
-                for src in sources:
-                    sources_list.append({
-                        "source": src.metadata.get("source", "N/A"),
-                        "chunk_id": src.metadata.get("chunk_id", "N/A"),
-                        "content": src.page_content.replace("\\n", " ")
-                    })
+                response, source_docs = qa_chain({"query": last_user_msg_content})
+                response_content = response
+                sources_list = source_docs if source_docs else []
         except Exception as e:
             response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
-        
-        # Tin nhắn "Bot đang suy nghĩ..." đã được hiển thị.
-        # Giờ xóa nó đi TRƯỚC KHI thêm câu trả lời thật.
-        # This is no longer needed as the placeholder is not explicitly managed with st.empty()
-        # if st.session_state.message_placeholder:
-        #     st.session_state.message_placeholder.empty()
-        #     st.session_state.message_placeholder = None 
         
         st.session_state.messages.append({"role": "assistant", "content": response_content, "sources": sources_list})
         save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
         st.session_state.bot_answering = False
         st.rerun()
+
 else:
     st.error("Trạng thái không xác định. Đang reset về trang chủ.")
     reset_to_upload()

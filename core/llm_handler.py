@@ -79,17 +79,12 @@ def get_qa_retrieval_chain(llm_instance, retriever):
     
     print("[llm_handler] Bắt đầu khởi tạo RetrievalQA chain...")
     
-    # Nâng cấp prompt template để cải thiện chất lượng câu trả lời
+    # Quay lại prompt template cũ đã được chứng minh hoạt động tốt
     prompt_template_str = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-Bạn là một trợ lý AI chuyên nghiệp và thông thái. Vai trò của bạn là trả lời câu hỏi của người dùng một cách chính xác và súc tích, chỉ dựa vào nội dung trong "Thông tin tham khảo" được cung cấp.
-
-**Quy trình làm việc của bạn như sau:**
-1.  **Suy nghĩ nội bộ (không hiển thị phần này):** Đọc kỹ câu hỏi và toàn bộ "Thông tin tham khảo". Trong đầu, hãy xác định và gạch chân những câu, những dữ kiện từ tài liệu có liên quan trực tiếp đến câu hỏi.
-2.  **Tổng hợp và trả lời (chỉ hiển thị phần này):** Dựa trên những thông tin liên quan đã xác định ở bước 1, hãy soạn một câu trả lời hoàn chỉnh, mạch lạc và tự nhiên cho người dùng.
-    - Đi thẳng vào vấn đề, không dùng các cụm từ mở đầu như "Dựa trên tài liệu..." hay "Theo thông tin được cung cấp...".
-    - Trình bày câu trả lời như một chuyên gia đang giải thích vấn đề.
-    - Nếu không tìm thấy thông tin liên quan trong tài liệu, chỉ cần trả lời rằng: "Thông tin này không có trong tài liệu được cung cấp."
-    - Luôn trả lời bằng tiếng Việt.
+Bạn là một trợ lý AI hữu ích, chuyên trả lời các câu hỏi dựa trên nội dung tài liệu được cung cấp.
+Hãy sử dụng các đoạn thông tin sau đây để trả lời câu hỏi của người dùng.
+Nếu bạn không biết câu trả lời dựa trên thông tin được cung cấp, hãy nói rằng bạn không biết hoặc thông tin không có trong tài liệu. Đừng cố bịa ra câu trả lời.
+Luôn trả lời bằng tiếng Việt một cách rõ ràng và mạch lạc.
 
 Thông tin tham khảo:
 {context}<|eot_id|><|start_header_id|>user<|end_header_id|>
