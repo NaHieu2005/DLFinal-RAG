@@ -320,11 +320,11 @@ def get_or_create_vector_store(p_session_id, documents_info, embedding_model_ins
                 else:
                     print(f"[embedding_handler] Có lỗi khi lưu vector store hoặc parent chunks cho ID: {vs_id}")
             
-            # Trả về parent_retriever để sử dụng cho Parent Document Retrieval
-            return parent_retriever, vs_id
+                # Trả về parent_retriever để sử dụng cho Parent Document Retrieval
+                return parent_retriever, vs_id
             else:
-            print(f"[embedding_handler] parent_chunks hoặc child_chunks rỗng cho ID: {vs_id}")
-            return None, None
+                print(f"[embedding_handler] parent_chunks hoặc child_chunks rỗng cho ID: {vs_id}")
+                return None, None
     # Xử lý định dạng tài liệu truyền thống
     elif isinstance(documents_info, list):
         documents = documents_info

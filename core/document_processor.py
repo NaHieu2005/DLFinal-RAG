@@ -147,12 +147,12 @@ def process_uploaded_files(uploaded_files):
                 child_doc = Document(page_content=_child_content, metadata=child_metadata)
                 child_chunks.append(child_doc)
     
-        print(f"[document_processor] Đã chia thành {len(child_chunks)} child chunks.")
-        print(f"[document_processor] Xử lý tài liệu hoàn tất trong {time.time() - start_time:.2f} giây.")
-        
-        # Hàm giờ trả về parent và child chunks
-        return parent_chunks, child_chunks
-            except Exception as e:
+            print(f"[document_processor] Đã chia thành {len(child_chunks)} child chunks.")
+            print(f"[document_processor] Xử lý tài liệu hoàn tất trong {time.time() - start_time:.2f} giây.")
+            
+            # Hàm giờ trả về parent và child chunks
+            return parent_chunks, child_chunks
+    except Exception as e:
         print(f"[document_processor] Lỗi nghiêm trọng khi chia chunks: {e}")
         st.error(f"Lỗi khi xử lý tài liệu: {str(e)}")
         return None, None

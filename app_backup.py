@@ -549,11 +549,11 @@ elif st.session_state.state == "chatting":
                             except Exception as e:
                                 print(f"[app] Lỗi khi xử lý nguồn: {e}")
                                 # Thêm nguồn lỗi để có thông tin debug
-                                sources_list.append({
-                                    "source": "Lỗi khi xử lý",
-                                    "chunk_id": "error",
-                                    "content": f"Đã xảy ra lỗi: {str(e)}"
-                                })
+                        sources_list.append({
+                            "source": "Lỗi khi xử lý",
+                            "chunk_id": "error",
+                            "content": f"Đã xảy ra lỗi: {str(e)}"
+                        })
                     
                     # Đảm bảo luôn có ít nhất một nguồn
                     if not sources_list:
