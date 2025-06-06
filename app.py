@@ -1,205 +1,355 @@
 import streamlit as st
+from ui.sidebar import sidebar
+from ui.chat_interface import file_upload_screen, processing_screen, chat_screen
+from core.document_processor import process_uploaded_files
+from core.embedding_handler import get_embedding_model, get_or_create_vector_store, generate_session_id, load_vector_store
+from core.llm_handler import get_llm_instance, get_qa_retrieval_chain
+from core.chat_history import save_chat_history, load_chat_history
 import os
-from dotenv import load_dotenv
-import pickle # Nếu bạn lưu document objects
-import re
+import shutil
+from config import CHAT_HISTORIES_DIR, VECTOR_STORES_DIR
 
-# Import các lớp LangChain cần thiết
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_community.chat_models import ChatOllama
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.docstore.document import Document
-
-# Thư viện đọc PDF (ví dụ)
-import PyPDF2 # Hoặc pdfplumber
-
-# Tải biến môi trường (nếu có, ví dụ cho API key nếu bạn chuyển sang LLM API khác)
-# load_dotenv() # Hiện tại không cần cho Ollama cục bộ
-
-# --- Cấu hình cố định (có thể đưa ra ngoài hoặc làm cấu hình người dùng) ---
-embedding_model_name = "bkai-foundation-models/vietnamese-bi-encoder"
-ollama_model_name = "llama3:8b-instruct-q4_0"
-
-# --- Hàm xử lý tài liệu ---
-def process_uploaded_file(uploaded_file):
-    """Đọc, làm sạch và chia chunk tài liệu được tải lên."""
-    text = ""
-    if uploaded_file is not None:
-        try:
-            file_extension = os.path.splitext(uploaded_file.name)[1].lower()
-            if file_extension == ".txt":
-                text = str(uploaded_file.read(), "utf-8")
-            elif file_extension == ".pdf":
-                pdf_reader = PyPDF2.PdfReader(uploaded_file)
-                for page_num in range(len(pdf_reader.pages)):
-                    page = pdf_reader.pages[page_num]
-                    text += page.extract_text()
-            else:
-                st.error("Định dạng file không được hỗ trợ. Vui lòng tải file .txt hoặc .pdf.")
-                return None
-        except Exception as e:
-            st.error(f"Lỗi khi đọc file: {e}")
-            return None
-
-        # Làm sạch văn bản (bạn có thể thêm các bước làm sạch chi tiết hơn ở đây)
-        text = re.sub(r'\s+', ' ', text).strip() # Ví dụ làm sạch cơ bản
-
-        # Chia chunk
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            chunk_overlap=300,
-            length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
-        # chunks_text = text_splitter.split_text(text)
-        # documents = [Document(page_content=t) for t in chunks_text] # Tạo Document objects đơn giản
-        documents = text_splitter.create_documents([text]) # Cách này tốt hơn
-        for i, doc in enumerate(documents): # Thêm metadata cơ bản
-            doc.metadata["source"] = uploaded_file.name
-            doc.metadata["chunk_id"] = i
-        return documents
-    return None
-
-# --- Hàm tạo hoặc tải Vector Store ---
-# Cache để không phải tạo lại embedding và vector store mỗi lần tương tác
-@st.cache_resource(show_spinner="Đang xử lý tài liệu và tạo cơ sở tri thức...")
-def get_vector_store(_documents, _embedding_model_name): # Thêm _ trước embedding_model_name để Streamlit cache đúng
-    """Tạo FAISS vector store từ các document đã chia chunk."""
-    if _documents:
-        try:
-            embeddings_model_instance = HuggingFaceEmbeddings(
-                model_name=_embedding_model_name,
-                model_kwargs={'device': 'cuda'}
-            )
-            vector_store_instance = FAISS.from_documents(_documents, embeddings_model_instance)
-            return vector_store_instance
-        except Exception as e:
-            st.error(f"Lỗi khi tạo vector store: {e}")
-            return None
-    return None
-
-# --- Hàm khởi tạo LLM và QA Chain ---
-# Cache để không phải load lại LLM mỗi lần
-@st.cache_resource(show_spinner="Đang khởi tạo mô hình AI...")
-def get_qa_chain(_ollama_model_name): # Thêm _ trước ollama_model_name
-    """Khởi tạo LLM và RetrievalQA chain."""
-    try:
-        llm_instance = ChatOllama(
-            model=_ollama_model_name,
-            temperature=0.2,
-        )
-
-        prompt_template_str = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-Bạn là một trợ lý AI hữu ích, chuyên trả lời các câu hỏi dựa trên nội dung tài liệu được cung cấp.
-Hãy sử dụng các đoạn thông tin sau đây để trả lời câu hỏi của người dùng.
-Nếu bạn không biết câu trả lời dựa trên thông tin được cung cấp, hãy nói rằng bạn không biết hoặc thông tin không có trong tài liệu. Đừng cố bịa ra câu trả lời.
-Luôn trả lời bằng tiếng Việt một cách rõ ràng và mạch lạc.
-
-Thông tin tham khảo:
-{context}<|eot_id|><|start_header_id|>user<|end_header_id|>
-Câu hỏi: {question}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-Câu trả lời hữu ích:"""
-
-        PROMPT = PromptTemplate(
-            template=prompt_template_str, input_variables=["context", "question"]
-        )
-        chain_type_kwargs = {"prompt": PROMPT}
-
-        # Retriever sẽ được gán sau khi vector_store được tạo
-        # Nên chúng ta không tạo qa_chain hoàn chỉnh ở đây ngay
-        return llm_instance, chain_type_kwargs
-    except Exception as e:
-        st.error(f"Lỗi khi khởi tạo LLM: {e}")
-        return None, None
-
-
-# --- Giao diện Streamlit ---
 st.set_page_config(page_title="Chatbot Tài Liệu RAG", layout="wide")
-st.title("💬 Chatbot Hỏi Đáp Tài Liệu (RAG với Llama 3)")
-st.markdown("Tải lên tài liệu của bạn ( .txt hoặc .pdf) và đặt câu hỏi về nội dung đó.")
 
-# --- Thanh bên (Sidebar) cho việc tải file ---
+def local_css(file_name):
+    with open(file_name, encoding="utf-8") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+local_css("style.css")
+
+# --- Sidebar ---
 with st.sidebar:
-    st.header("📁 Tải Tài Liệu")
-    uploaded_file = st.file_uploader("Chọn một file .txt hoặc .pdf", type=["txt", "pdf"])
+    new_chat, selected_session_id = sidebar()
 
-    if uploaded_file:
-        st.success(f"Đã tải lên file: {uploaded_file.name}")
+# --- Session State ---
+def reset_to_upload():
+    keys_to_reset = [
+        "uploaded_files", "vector_store", "session_id", 
+        "file_names", "messages", "current_session_display_name"
+    ]
+    for key in keys_to_reset:
+        st.session_state[key] = None
+    st.session_state.state = "upload"
+    st.session_state.processing = False
+    st.session_state.bot_answering = False
+    st.session_state.messages = [] # Đảm bảo messages là list rỗng
+
+def reset_to_chat(): # Hàm này có thể không cần thiết nữa nếu logic được đặt đúng chỗ
+    st.session_state.state = "chatting"
+    st.session_state.processing = False
+    st.session_state.bot_answering = False
+
+# Khởi tạo session_state nếu chưa có
+default_states = {
+    "state": "upload",
+    "uploaded_files": None,
+    "processing": False,
+    "vector_store": None,
+    "session_id": None,
+    "file_names": None,
+    "messages": [],
+    "bot_answering": False,
+    "current_session_display_name": None,
+    "stop_action_requested": False
+}
+for key, value in default_states.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+# --- Xử lý New Chat hoặc chọn chat cũ ---
+if new_chat:
+    reset_to_upload()
+    st.rerun()
+
+if selected_session_id:
+    if st.session_state.session_id != selected_session_id or st.session_state.state != "chatting":
+        st.session_state.session_id = selected_session_id
+        messages, display_name = load_chat_history(selected_session_id)
+        st.session_state.messages = messages
+        st.session_state.current_session_display_name = display_name
+        
+        embedding_model = get_embedding_model()
+        if embedding_model:
+            loaded_vs = load_vector_store(selected_session_id, embedding_model)
+            if loaded_vs:
+                st.session_state.vector_store = loaded_vs
+                st.session_state.file_names = None 
+                st.session_state.state = "chatting"
+                st.session_state.processing = False # Đảm bảo reset processing flag
+                st.session_state.bot_answering = False # Đảm bảo reset bot_answering flag
+            else:
+                st.error(f"Không thể tải cơ sở tri thức cho session '{st.session_state.current_session_display_name}'. Có thể đã bị xóa hoặc lỗi. Vui lòng tạo chat mới.")
+                reset_to_upload() 
+        else:
+            st.error("Lỗi nghiêm trọng: Không thể khởi tạo embedding model khi tải session.")
+            reset_to_upload()
+    st.rerun()
+
+# --- Giao diện chính ---
+if st.session_state.state == "upload":
+    st.title("💬 Chatbot Hỏi Đáp Tài Liệu (RAG với Llama 3)")
+    st.markdown("#### Tải lên tài liệu của bạn để bắt đầu")
+    valid_files, error_files, start_clicked, _ = file_upload_screen(st.session_state.uploaded_files)
+    if valid_files:
+        st.session_state.uploaded_files = valid_files
     else:
-        st.info("Vui lòng tải lên một tài liệu để bắt đầu.")
+        st.session_state.uploaded_files = None
+    
+    if error_files:
+        st.warning("Một số file không hợp lệ và sẽ bị bỏ qua:")
+        for fname, reason in error_files.items():
+            st.write(f"- {fname}: {reason}")
 
-# --- Xử lý và khởi tạo ---
-documents = None
-vector_store = None
-llm, chain_type_kwargs = None, None
+    if start_clicked and st.session_state.uploaded_files:
+        # Tạo session_id mới cho chat mới
+        new_session_id = generate_session_id([f.name for f in st.session_state.uploaded_files])
+        st.session_state.session_id = new_session_id
+        # Đặt display_name ban đầu bằng session_id (hoặc có thể tùy chỉnh sau)
+        st.session_state.current_session_display_name = new_session_id 
+        st.session_state.file_names = [f.name for f in st.session_state.uploaded_files] # Lưu tên file
+        st.session_state.state = "processing"
+        st.session_state.stop_action_requested = False # Reset cờ dừng khi bắt đầu xử lý mới
+        st.session_state.bot_answering = False # Đảm bảo bot_answering là false
+        st.rerun()
 
-if uploaded_file:
-    documents = process_uploaded_file(uploaded_file)
-    if documents:
-        vector_store = get_vector_store(documents, embedding_model_name) # Truyền tên model vào
-        if vector_store:
-            llm, chain_type_kwargs = get_qa_chain(ollama_model_name) # Truyền tên model vào
-
-# --- Khởi tạo lịch sử chat trong session state ---
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Xin chào! Hãy tải tài liệu lên và đặt câu hỏi cho tôi nhé."}]
-
-# Hiển thị các tin nhắn đã có
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if message["role"] == "assistant" and "sources" in message:
-            with st.expander("Xem nguồn tham khảo"):
-                for i, source in enumerate(message["sources"]):
-                    st.caption(f"Nguồn {i+1} (Từ: {source.metadata.get('source', 'N/A')}, Chunk ID: {source.metadata.get('chunk_id', 'N/A')})")
-                    st.markdown(source.page_content.replace("\n", " ")[:300] + "...")
-
-
-# --- Nhận input từ người dùng ---
-if prompt := st.chat_input("Câu hỏi của bạn về tài liệu..."):
-    if not uploaded_file or not vector_store or not llm:
-        st.warning("Vui lòng tải lên và xử lý tài liệu trước khi đặt câu hỏi.")
+elif st.session_state.state == "processing":
+    st.title(f"⚙️ Đang xử lý: {st.session_state.current_session_display_name}")
+    if not st.session_state.uploaded_files:
+        st.warning("Không có file nào để xử lý. Vui lòng quay lại và tải lên.")
+        if st.button("Quay lại trang Upload"):
+            reset_to_upload()
+            st.rerun()
     else:
-        # Thêm tin nhắn của người dùng vào lịch sử chat
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        stop_processing_clicked = processing_screen(st.session_state.uploaded_files)
+        if stop_processing_clicked:
+            st.warning("Đã dừng quá trình xử lý tài liệu.")
+            reset_to_upload() # reset_to_upload đã bao gồm việc xóa session_id, etc.
+            st.rerun()
+        else:
+            if not st.session_state.vector_store: # Chỉ xử lý nếu chưa có vector_store
+                documents, file_names_processed = process_uploaded_files(st.session_state.uploaded_files)
+                # st.session_state.file_names = file_names_processed # Cập nhật lại file_names nếu process_uploaded_files có trả về
+                
+                if documents:
+                    embedding_model = get_embedding_model()
+                    if embedding_model:
+                        vector_store, vs_id_saved = get_or_create_vector_store(
+                            st.session_state.session_id, 
+                            documents, 
+                            embedding_model
+                        )
+                        if vector_store:
+                            st.session_state.vector_store = vector_store
+                            st.session_state.messages = [{"role": "assistant", "content": f"Tài liệu cho '{st.session_state.current_session_display_name}' đã sẵn sàng! Bạn hãy đặt câu hỏi."}]
+                            save_chat_history(
+                                st.session_state.session_id, 
+                                st.session_state.messages, 
+                                display_name_to_set=st.session_state.current_session_display_name
+                            )
+                            st.session_state.state = "chatting" # Chuyển sang chatting
+                            st.session_state.processing = False
+                            st.session_state.bot_answering = False
+                            st.session_state.stop_action_requested = False # Đảm bảo reset cờ dừng
+                            st.rerun()
+                        else:
+                            st.error("Không thể tạo cơ sở tri thức.")
+                            reset_to_upload()
+                            st.rerun()
+                    else:
+                        st.error("Lỗi nghiêm trọng: Không thể khởi tạo embedding model khi xử lý tài liệu.")
+                        reset_to_upload()
+                        st.rerun()
+                else:
+                    st.error("Không xử lý được tài liệu. Vui lòng kiểm tra định dạng file và thử lại.")
+                    # Không reset_to_upload() ngay, cho phép người dùng thấy lỗi và có thể quay lại
+                    if st.button("Thử lại với file khác"):
+                        reset_to_upload()
+                        st.rerun()
 
-        # Tạo QA chain với retriever đã được cập nhật
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=vector_store.as_retriever(search_kwargs={"k": 3}),
-            return_source_documents=True,
-            chain_type_kwargs=chain_type_kwargs
+elif st.session_state.state == "chatting":
+    if not st.session_state.session_id or not st.session_state.current_session_display_name:
+        st.warning("Không có session nào được chọn hoặc session bị lỗi. Vui lòng tạo chat mới hoặc chọn từ lịch sử.")
+        if st.button("Bắt đầu Chat Mới"):
+            reset_to_upload()
+            st.rerun()
+        st.stop()
+
+    st.title(f"💬 {st.session_state.current_session_display_name}")
+
+    # Khu vực quản lý session (đổi tên, xóa)
+    with st.expander("Tùy chọn Session", expanded=False):
+        new_name = st.text_input(
+            "Đổi tên Session:", 
+            value=st.session_state.current_session_display_name,
+            key=f"rename_input_{st.session_state.session_id}"
         )
+        if st.button("Lưu tên mới", key=f"save_rename_btn_{st.session_state.session_id}"):
+            if new_name.strip() and new_name.strip() != st.session_state.current_session_display_name:
+                save_chat_history(
+                    st.session_state.session_id, 
+                    st.session_state.messages, 
+                    display_name_to_set=new_name.strip()
+                )
+                st.session_state.current_session_display_name = new_name.strip()
+                st.success(f"Đã đổi tên session thành: {new_name.strip()}")
+                st.rerun()
+            elif not new_name.strip():
+                st.warning("Tên hiển thị không được để trống.")
+            else:
+                st.info("Tên mới giống với tên hiện tại.")
 
+        st.markdown("---")
+        st.markdown("<h5 style='color: red;'>Xóa Session này</h5>", unsafe_allow_html=True)
+        confirm_delete_text = f"Tôi chắc chắn muốn xóa session '{st.session_state.current_session_display_name}' và tất cả dữ liệu liên quan."
+        confirm_delete = st.checkbox(confirm_delete_text, key=f"confirm_delete_cb_{st.session_state.session_id}")
+        
+        if st.button("XÁC NHẬN XÓA", type="primary", disabled=not confirm_delete, key=f"confirm_delete_btn_{st.session_state.session_id}"):
+            if confirm_delete:
+                session_id_to_delete = st.session_state.session_id
+                display_name_deleted = st.session_state.current_session_display_name
+                
+                history_file_path = os.path.join(CHAT_HISTORIES_DIR, f"{session_id_to_delete}.json")
+                vector_store_path = os.path.join(VECTOR_STORES_DIR, session_id_to_delete)
+                
+                deleted_files = False
+                try:
+                    if os.path.exists(history_file_path):
+                        os.remove(history_file_path)
+                        deleted_files = True
+                    if os.path.exists(vector_store_path):
+                        shutil.rmtree(vector_store_path)
+                        deleted_files = True
+                    
+                    if deleted_files:
+                        st.success(f"Đã xóa thành công session: {display_name_deleted} (ID: {session_id_to_delete})")
+                    else:
+                        st.warning(f"Không tìm thấy file nào để xóa cho session: {display_name_deleted}. Có thể đã được xóa trước đó.")
+                    
+                    reset_to_upload()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Lỗi khi xóa session '{display_name_deleted}': {e}")
+            else:
+                st.warning("Vui lòng xác nhận trước khi xóa.")
+
+    # Hiển thị lịch sử chat và placeholder cho "Bot đang suy nghĩ..."
+    st.markdown("<div class='chat-history-area'>", unsafe_allow_html=True)
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if message["role"] == "assistant" and "sources" in message and message["sources"]:
+                with st.expander("Xem nguồn tham khảo"):
+                    for i, source in enumerate(message["sources"]):
+                        st.caption(f"Nguồn {i+1} (Từ: {source.get('source', 'N/A')}, Chunk ID: {source.get('chunk_id', 'N/A')})")
+                        content_preview = source.get('content', '')[:300] + "..." if source.get('content') else "N/A"
+                        st.markdown(content_preview)
+
+    # Simplified: Display "Bot đang suy nghĩ..." directly if bot is answering
+    if st.session_state.bot_answering:
         with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            message_placeholder.markdown("Bot đang suy nghĩ...")
+            st.markdown("▌ Bot đang suy nghĩ...")
+        
+    st.markdown("</div>", unsafe_allow_html=True) # Đóng div chat-history-area
+
+    # Gọi chat_screen để lấy input và các nút điều khiển
+    prompt, send_triggered, stop_button_clicked_in_ui = chat_screen(
+        st.session_state.messages, 
+        st.session_state.bot_answering
+    )
+
+    # Ưu tiên xử lý yêu cầu dừng nếu có
+    if st.session_state.get('stop_action_requested', False):
+        if st.session_state.bot_answering: 
+            st.session_state.bot_answering = False
+            # Placeholder sẽ được tự động xóa ở lần rerun tiếp theo bởi khối logic ở trên
+            # (khi bot_answering là False và placeholder tồn tại)
+            
+            if not st.session_state.messages or st.session_state.messages[-1]["content"] != ":warning: Trả lời đã bị dừng bởi người dùng.":
+                st.session_state.messages.append({"role": "assistant", "content": ":warning: Trả lời đã bị dừng bởi người dùng."})
+                save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
+            
+            st.session_state.stop_action_requested = False 
+            st.rerun()
+        else:
+            st.session_state.stop_action_requested = False
+            # Không cần rerun nếu không có gì thay đổi
+
+    elif send_triggered and not st.session_state.bot_answering and prompt.strip():
+        st.session_state.messages.append({"role": "user", "content": prompt.strip()})
+        st.session_state.bot_answering = True
+        st.session_state.stop_action_requested = False 
+        save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
+        # Placeholder sẽ được tạo ở lần rerun tiếp theo bởi khối logic ở trên
+        st.rerun()
+
+    elif st.session_state.bot_answering:
+        # Placeholder đã được hiển thị bởi khối logic ở trên trước khi chat_screen được gọi.
+        # Giờ chỉ tập trung vào việc lấy câu trả lời.
+
+        if not st.session_state.vector_store:
+            st.warning("Đang thử tải lại cơ sở tri thức...")
+            embedding_model = get_embedding_model()
+            if embedding_model:
+                vector_store = load_vector_store(st.session_state.session_id, embedding_model)
+                if vector_store:
+                    st.session_state.vector_store = vector_store
+                    st.rerun() 
+                else:
+                    st.error("Lỗi nghiêm trọng: Không thể tải cơ sở tri thức cho phiên làm việc này. Vui lòng thử tạo phiên mới từ đầu.")
+                    st.session_state.bot_answering = False # Dừng bot nếu không tải được VS
+                    # Placeholder sẽ tự động xóa ở rerun tiếp theo
+                    reset_to_upload()
+                    st.rerun()
+            else:
+                st.error("Lỗi nghiêm trọng: Không thể khởi tạo embedding model để tải lại vector store.")
+                st.session_state.bot_answering = False # Dừng bot
+                reset_to_upload()
+                st.rerun()
+
+        if st.session_state.vector_store: 
+            llm = get_llm_instance()
+            qa_chain = get_qa_retrieval_chain(llm, st.session_state.vector_store.as_retriever(search_kwargs={"k": 3}))
+            
+            response_content = ""
+            sources_list = []
             try:
-                response = qa_chain.invoke({"query": prompt})
-                answer = response.get("result", "Xin lỗi, tôi không tìm thấy câu trả lời.")
-                if hasattr(answer, 'content'): # Nếu kết quả là AIMessage
-                    answer = answer.content
-
-                message_placeholder.markdown(answer)
-                # Lưu nguồn tham khảo
-                sources = response.get("source_documents", [])
-                st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
-
-                # Hiển thị nguồn ngay dưới câu trả lời (tùy chọn)
-                if sources:
-                    with st.expander("Xem nguồn tham khảo cho câu trả lời này"):
-                        for i, source in enumerate(sources):
-                            st.caption(f"Nguồn {i+1} (Từ: {source.metadata.get('source', 'N/A')}, Chunk ID: {source.metadata.get('chunk_id', 'N/A')})")
-                            st.markdown(source.page_content.replace("\n", " ")[:300] + "...")
-
-
+                last_user_msg_content = ""
+                for msg in reversed(st.session_state.messages):
+                    if msg["role"] == "user":
+                        last_user_msg_content = msg["content"]
+                        break
+                
+                if not last_user_msg_content:
+                    st.warning("Không tìm thấy câu hỏi từ người dùng để xử lý.")
+                    st.session_state.bot_answering = False
+                    st.session_state.stop_action_requested = False 
+                    # Placeholder sẽ tự động xóa ở rerun tiếp theo
+                    st.rerun()
+                else:
+                    response = qa_chain.invoke({"query": last_user_msg_content})
+                    response_content = response.get("result", "Xin lỗi, tôi không tìm thấy câu trả lời.")
+                    sources = response.get("source_documents", [])
+                    for src in sources:
+                        sources_list.append({
+                            "source": src.metadata.get("source", "N/A"),
+                            "chunk_id": src.metadata.get("chunk_id", "N/A"),
+                            "content": src.page_content.replace("\\n", " ")
+                        })
             except Exception as e:
-                error_message = f"Đã xảy ra lỗi: {e}"
-                message_placeholder.error(error_message)
-                st.session_state.messages.append({"role": "assistant", "content": error_message})
+                response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
+            
+            # Tin nhắn "Bot đang suy nghĩ..." đã được hiển thị.
+            # Giờ xóa nó đi TRƯỚC KHI thêm câu trả lời thật.
+            # This is no longer needed as the placeholder is not explicitly managed with st.empty()
+            # if st.session_state.message_placeholder:
+            #     st.session_state.message_placeholder.empty()
+            #     st.session_state.message_placeholder = None 
+            
+            st.session_state.messages.append({"role": "assistant", "content": response_content, "sources": sources_list})
+            save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
+            st.session_state.bot_answering = False
+            st.rerun()
+else:
+    st.error("Trạng thái không xác định. Đang reset về trang chủ.")
+    reset_to_upload()
+    st.rerun()
