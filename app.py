@@ -2,8 +2,8 @@ import streamlit as st
 from ui.sidebar import sidebar
 from ui.chat_interface import file_upload_screen, processing_screen, chat_screen
 from core.document_processor import process_uploaded_files
-from core.embedding_handler import get_embedding_model, get_or_create_vector_store, generate_session_id, load_vector_store
-from core.llm_handler import get_llm_instance, get_qa_retrieval_chain
+from core.embedding_handler import get_embedding_model, get_or_create_vector_store, generate_session_id, recreate_retriever_from_saved
+from core.llm_handler import get_llm_instance, get_qa_retrieval_chain, get_reranker
 from core.chat_history import save_chat_history, load_chat_history
 import os
 import shutil
@@ -45,6 +45,7 @@ default_states = {
     "uploaded_files": None,
     "processing": False,
     "vector_store": None,
+    "retriever": None,  # Thêm trường mới cho retriever nâng cao
     "session_id": None,
     "file_names": None,
     "messages": [],
@@ -70,9 +71,11 @@ if selected_session_id:
         
         embedding_model = get_embedding_model()
         if embedding_model:
-            loaded_vs = load_vector_store(selected_session_id, embedding_model)
-            if loaded_vs:
-                st.session_state.vector_store = loaded_vs
+            # Sử dụng hàm mới để tái tạo retriever từ dữ liệu đã lưu
+            retriever = recreate_retriever_from_saved(selected_session_id, embedding_model)
+            if retriever:
+                st.session_state.retriever = retriever
+                st.session_state.vector_store = None  # Không cần lưu vector_store riêng
                 st.session_state.file_names = None 
                 st.session_state.state = "chatting"
                 st.session_state.processing = False # Đảm bảo reset processing flag
@@ -126,20 +129,27 @@ elif st.session_state.state == "processing":
             reset_to_upload() # reset_to_upload đã bao gồm việc xóa session_id, etc.
             st.rerun()
         else:
-            if not st.session_state.vector_store: # Chỉ xử lý nếu chưa có vector_store
-                documents, file_names_processed = process_uploaded_files(st.session_state.uploaded_files)
-                # st.session_state.file_names = file_names_processed # Cập nhật lại file_names nếu process_uploaded_files có trả về
+            if not st.session_state.vector_store and not st.session_state.retriever:  # Chỉ xử lý nếu chưa có vector_store hoặc retriever
+                parent_chunks, child_chunks = process_uploaded_files(st.session_state.uploaded_files)
                 
-                if documents:
+                if parent_chunks and child_chunks:
                     embedding_model = get_embedding_model()
                     if embedding_model:
-                        vector_store, vs_id_saved = get_or_create_vector_store(
+                        # Truyền cả parent_chunks và child_chunks để xử lý nâng cao
+                        retriever, vs_id_saved = get_or_create_vector_store(
                             st.session_state.session_id, 
-                            documents, 
+                            (parent_chunks, child_chunks),  # Truyền tuple gồm cả parent và child chunks
                             embedding_model
                         )
-                        if vector_store:
-                            st.session_state.vector_store = vector_store
+                        
+                        if retriever:
+                            # Lưu lại retriever và chuyển thành main retriever để dùng sau này
+                            st.session_state.retriever = retriever
+                            
+                            # Có thể cũng lưu vector_store nếu cần thiết
+                            # st.session_state.vector_store = vector_store
+                            
+                            # Khởi tạo tin nhắn chào mừng đầu tiên
                             st.session_state.messages = [{"role": "assistant", "content": f"Tài liệu cho '{st.session_state.current_session_display_name}' đã sẵn sàng! Bạn hãy đặt câu hỏi."}]
                             save_chat_history(
                                 st.session_state.session_id, 
@@ -286,13 +296,14 @@ elif st.session_state.state == "chatting":
         # Placeholder đã được hiển thị bởi khối logic ở trên trước khi chat_screen được gọi.
         # Giờ chỉ tập trung vào việc lấy câu trả lời.
 
-        if not st.session_state.vector_store:
+        if not st.session_state.retriever and not st.session_state.vector_store:
             st.warning("Đang thử tải lại cơ sở tri thức...")
             embedding_model = get_embedding_model()
             if embedding_model:
-                vector_store = load_vector_store(st.session_state.session_id, embedding_model)
-                if vector_store:
-                    st.session_state.vector_store = vector_store
+                # Sử dụng hàm mới để tái tạo retriever từ dữ liệu đã lưu
+                retriever = recreate_retriever_from_saved(st.session_state.session_id, embedding_model)
+                if retriever:
+                    st.session_state.retriever = retriever
                     st.rerun() 
                 else:
                     st.error("Lỗi nghiêm trọng: Không thể tải cơ sở tri thức cho phiên làm việc này. Vui lòng thử tạo phiên mới từ đầu.")
@@ -306,49 +317,51 @@ elif st.session_state.state == "chatting":
                 reset_to_upload()
                 st.rerun()
 
-        if st.session_state.vector_store: 
-            llm = get_llm_instance()
-            qa_chain = get_qa_retrieval_chain(llm, st.session_state.vector_store.as_retriever(search_kwargs={"k": 3}))
+        # Ưu tiên sử dụng retriever nâng cao (đã được khởi tạo với parent-child)
+        retriever_to_use = st.session_state.retriever
             
-            response_content = ""
-            sources_list = []
-            try:
-                last_user_msg_content = ""
-                for msg in reversed(st.session_state.messages):
-                    if msg["role"] == "user":
-                        last_user_msg_content = msg["content"]
-                        break
-                
-                if not last_user_msg_content:
-                    st.warning("Không tìm thấy câu hỏi từ người dùng để xử lý.")
-                    st.session_state.bot_answering = False
-                    st.session_state.stop_action_requested = False 
-                    # Placeholder sẽ tự động xóa ở rerun tiếp theo
-                    st.rerun()
-                else:
-                    response = qa_chain.invoke({"query": last_user_msg_content})
-                    response_content = response.get("result", "Xin lỗi, tôi không tìm thấy câu trả lời.")
-                    sources = response.get("source_documents", [])
-                    for src in sources:
-                        sources_list.append({
-                            "source": src.metadata.get("source", "N/A"),
-                            "chunk_id": src.metadata.get("chunk_id", "N/A"),
-                            "content": src.page_content.replace("\\n", " ")
-                        })
-            except Exception as e:
-                response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
+        llm = get_llm_instance()
+        qa_chain = get_qa_retrieval_chain(llm, retriever_to_use)
+        
+        response_content = ""
+        sources_list = []
+        try:
+            last_user_msg_content = ""
+            for msg in reversed(st.session_state.messages):
+                if msg["role"] == "user":
+                    last_user_msg_content = msg["content"]
+                    break
             
-            # Tin nhắn "Bot đang suy nghĩ..." đã được hiển thị.
-            # Giờ xóa nó đi TRƯỚC KHI thêm câu trả lời thật.
-            # This is no longer needed as the placeholder is not explicitly managed with st.empty()
-            # if st.session_state.message_placeholder:
-            #     st.session_state.message_placeholder.empty()
-            #     st.session_state.message_placeholder = None 
-            
-            st.session_state.messages.append({"role": "assistant", "content": response_content, "sources": sources_list})
-            save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
-            st.session_state.bot_answering = False
-            st.rerun()
+            if not last_user_msg_content:
+                st.warning("Không tìm thấy câu hỏi từ người dùng để xử lý.")
+                st.session_state.bot_answering = False
+                st.session_state.stop_action_requested = False 
+                # Placeholder sẽ tự động xóa ở rerun tiếp theo
+                st.rerun()
+            else:
+                response = qa_chain.invoke({"query": last_user_msg_content})
+                response_content = response.get("result", "Xin lỗi, tôi không tìm thấy câu trả lời.")
+                sources = response.get("source_documents", [])
+                for src in sources:
+                    sources_list.append({
+                        "source": src.metadata.get("source", "N/A"),
+                        "chunk_id": src.metadata.get("chunk_id", "N/A"),
+                        "content": src.page_content.replace("\\n", " ")
+                    })
+        except Exception as e:
+            response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
+        
+        # Tin nhắn "Bot đang suy nghĩ..." đã được hiển thị.
+        # Giờ xóa nó đi TRƯỚC KHI thêm câu trả lời thật.
+        # This is no longer needed as the placeholder is not explicitly managed with st.empty()
+        # if st.session_state.message_placeholder:
+        #     st.session_state.message_placeholder.empty()
+        #     st.session_state.message_placeholder = None 
+        
+        st.session_state.messages.append({"role": "assistant", "content": response_content, "sources": sources_list})
+        save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
+        st.session_state.bot_answering = False
+        st.rerun()
 else:
     st.error("Trạng thái không xác định. Đang reset về trang chủ.")
     reset_to_upload()
