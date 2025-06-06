@@ -41,7 +41,7 @@ def direct_vector_search(question, embedding_model, vs_id, top_k=10):
         # Tải FAISS vector store trực tiếp
         try:
             print(f"[app] Đang tải FAISS vector store từ {vs_path}...")
-            vector_store = FAISS.load_local(vs_path, embedding_model)
+            vector_store = FAISS.load_local(vs_path, embedding_model, allow_dangerous_deserialization=True)
             
             # Thực hiện tìm kiếm
             print(f"[app] Thực hiện tìm kiếm trực tiếp với k={top_k}...")
@@ -364,7 +364,7 @@ elif st.session_state.state == "chatting":
                 st.info(f"Có {len(message['sources'])} nguồn được tìm thấy.")
                 
                 # Hiển thị các nguồn
-                for i, source in enumerate(message["sources"]):
+                    for i, source in enumerate(message["sources"]):
                     try:
                         source_name = source.get('source', 'N/A')
                         chunk_id = source.get('chunk_id', 'N/A')
@@ -444,23 +444,23 @@ elif st.session_state.state == "chatting":
             
         llm = get_llm_instance()
         qa_chain = get_qa_retrieval_chain(llm, retriever_to_use)
-        
-        response_content = ""
-        sources_list = []
-        try:
-            last_user_msg_content = ""
-            for msg in reversed(st.session_state.messages):
-                if msg["role"] == "user":
-                    last_user_msg_content = msg["content"]
-                    break
             
-            if not last_user_msg_content:
-                st.warning("Không tìm thấy câu hỏi từ người dùng để xử lý.")
-                st.session_state.bot_answering = False
-                st.session_state.stop_action_requested = False 
-                # Placeholder sẽ tự động xóa ở rerun tiếp theo
-                st.rerun()
-            else:
+            response_content = ""
+            sources_list = []
+            try:
+                last_user_msg_content = ""
+                for msg in reversed(st.session_state.messages):
+                    if msg["role"] == "user":
+                        last_user_msg_content = msg["content"]
+                        break
+                
+                if not last_user_msg_content:
+                    st.warning("Không tìm thấy câu hỏi từ người dùng để xử lý.")
+                    st.session_state.bot_answering = False
+                    st.session_state.stop_action_requested = False 
+                    # Placeholder sẽ tự động xóa ở rerun tiếp theo
+                    st.rerun()
+                else:
                 # Cập nhật: Sử dụng phương thức mới để gọi qa_chain
                 try:
                     # Thử sử dụng phương thức invoke của LangChain mới
@@ -549,7 +549,7 @@ elif st.session_state.state == "chatting":
                             except Exception as e:
                                 print(f"[app] Lỗi khi xử lý nguồn: {e}")
                                 # Thêm nguồn lỗi để có thông tin debug
-                                sources_list.append({
+                        sources_list.append({
                                     "source": "Lỗi khi xử lý",
                                     "chunk_id": "error",
                                     "content": f"Đã xảy ra lỗi: {str(e)}"
@@ -577,9 +577,9 @@ elif st.session_state.state == "chatting":
                         "chunk_id": "format-error",
                         "content": "Kết quả trả về không đúng định dạng. Vui lòng liên hệ quản trị viên."
                     }]
-        except Exception as e:
-            response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
-        
+            except Exception as e:
+                response_content = f"Đã xảy ra lỗi khi xử lý yêu cầu: {e}"
+            
         # Debug print để kiểm tra message trước khi thêm vào st.session_state.messages
         print("\n\n=== DEBUG FINAL MESSAGE ===")
         print(f"Response content length: {len(response_content)}")
@@ -590,9 +590,9 @@ elif st.session_state.state == "chatting":
         print("=== END DEBUG FINAL MESSAGE ===\n\n")
         
         st.session_state.messages.append(message_to_append)
-        save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
-        st.session_state.bot_answering = False
-        st.rerun()
+            save_chat_history(st.session_state.session_id, st.session_state.messages, st.session_state.current_session_display_name)
+            st.session_state.bot_answering = False
+            st.rerun()
 
     # Mới thêm: Kiểm tra và đảm bảo tất cả tin nhắn đều có nguồn (để lưu đúng khi save_chat_history)
     for i, msg in enumerate(st.session_state.messages):

@@ -80,7 +80,7 @@ def process_uploaded_files(uploaded_files):
     
     if not isinstance(uploaded_files, list):
         uploaded_files = [uploaded_files]
-        
+
     if not uploaded_files:
         print("[document_processor] Không có file nào được cung cấp.")
         return None, None
@@ -152,7 +152,7 @@ def process_uploaded_files(uploaded_files):
         
         # Hàm giờ trả về parent và child chunks
         return parent_chunks, child_chunks
-    except Exception as e:
+            except Exception as e:
         print(f"[document_processor] Lỗi nghiêm trọng khi chia chunks: {e}")
         st.error(f"Lỗi khi xử lý tài liệu: {str(e)}")
         return None, None
@@ -192,7 +192,7 @@ def process_simple_chunking(uploaded_files):
     
     if not raw_docs:
         return None, None
-    
+        
     # Tạo chunks đơn giản
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHILD_CHUNK_SIZE,

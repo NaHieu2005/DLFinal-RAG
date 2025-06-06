@@ -101,15 +101,17 @@ def save_vector_store(vector_store_instance, vs_id):
     return None
 
 def load_vector_store(vs_id, _embedding_model_instance):
-    """Tải FAISS vector store từ disk."""
+    """Tải vector store từ disk."""
     load_path = os.path.join(VECTOR_STORES_DIR, vs_id)
-    if os.path.exists(load_path) and _embedding_model_instance:
+    if os.path.exists(load_path):
         try:
-            print(f"[embedding_handler] Đang tải vector store từ: {load_path}")
-            return FAISS.load_local(load_path, _embedding_model_instance, allow_dangerous_deserialization=True)
+            # Thêm tham số allow_dangerous_deserialization=True để cho phép pickle
+            vector_store = FAISS.load_local(load_path, _embedding_model_instance, allow_dangerous_deserialization=True)
+            print(f"[embedding_handler] Đã tải vector store từ: {load_path}")
+            return vector_store
         except Exception as e:
             print(f"[embedding_handler] Lỗi khi tải vector store từ '{load_path}': {e}")
-            st.error(f"Lỗi khi tải vector store từ '{load_path}': {e}. Có thể cần phải tạo lại.")
+            st.error(f"Lỗi khi tải vector store '{vs_id}': {e}")
             return None
     print(f"[embedding_handler] Không tìm thấy vector store tại: {load_path}")
     return None
@@ -320,7 +322,7 @@ def get_or_create_vector_store(p_session_id, documents_info, embedding_model_ins
             
             # Trả về parent_retriever để sử dụng cho Parent Document Retrieval
             return parent_retriever, vs_id
-        else:
+            else:
             print(f"[embedding_handler] parent_chunks hoặc child_chunks rỗng cho ID: {vs_id}")
             return None, None
     # Xử lý định dạng tài liệu truyền thống
