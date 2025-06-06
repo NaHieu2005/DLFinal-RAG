@@ -8,7 +8,7 @@ Lê Vũ Hiếu - 23020365
 
 Đàm Lê Minh Quân - 23020416
 
-Nguyễn HoàngTú - 23020428
+Nguyễn Hoàng Tú - 23020428
 
 
 Hệ thống RAG (Retrieval Augmented Generation) nâng cao cho tài liệu Tiếng Việt sử dụng Llama 3, LangChain và Streamlit.
