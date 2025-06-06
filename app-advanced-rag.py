@@ -92,7 +92,7 @@ Câu trả lời hữu ích:"""
 
 # --- Giao diện Streamlit ---
 st.set_page_config(page_title="Chatbot Tài Liệu RAG", layout="wide")
-st.title("💬 Chatbot Hỏi Đáp Tài Liệu Nâng Cao")
+st.title("💬 Chatbot Hỏi Đáp Tài Liệu (RAG với Llama)")
 st.markdown("Tải lên tài liệu của bạn ( .txt hoặc .pdf) và đặt câu hỏi về nội dung đó.")
 
 # --- Thanh bên (Sidebar) ---
@@ -106,7 +106,7 @@ with st.sidebar:
 
 # --- Xử lý và khởi tạo ---
 # Khối này được tái cấu trúc hoàn toàn để tích hợp tất cả các kỹ thuật
-@st.cache_resource(show_spinner="Đang xử lý tài liệu và xây dựng pipeline RAG...")
+@st.cache_resource(show_spinner="Đang xử lý tài liệu...")
 def build_full_rag_pipeline(_raw_documents):
     # --- 1: LOGIC CỦA PARENT DOCUMENT ---
     parent_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
@@ -143,7 +143,7 @@ def build_full_rag_pipeline(_raw_documents):
     parent_retriever_chain = hybrid_retriever | RunnableLambda(get_parent_chunks)
 
     # --- 4: LOGIC CỦA RE-RANKING (trên chunk cha) ---
-    reranker = CohereRerank(cohere_api_key=COHERE_API_KEY, model="rerank-multilingual-v3.0", top_n=3)
+    reranker = CohereRerank(cohere_api_key=COHERE_API_KEY, model="rerank-multilingual-v3.0", top_n=8)
     final_retriever = ContextualCompressionRetriever(base_compressor=reranker, base_retriever=parent_retriever_chain)
     
     return final_retriever
@@ -164,10 +164,9 @@ if "messages" not in st.session_state:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        if message["role"] == "assistant" and "sources" in message:
+        if message["role"] == "assistant" and "sources" in message and message["sources"]:
             with st.expander("Xem nguồn tham khảo"):
                 for i, source in enumerate(message["sources"]):
-                    # Metadata của chunk cha không có "chunk_id" nhưng có "source"
                     st.caption(f"Nguồn {i+1} (Từ: {source.metadata.get('source', 'N/A')})")
                     st.markdown(source.page_content.replace("\n", " "))
 
@@ -180,47 +179,49 @@ if prompt := st.chat_input("Câu hỏi của bạn về tài liệu..."):
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # --- ĐỊNH NGHĨA HÀM SẮP XẾP LẠI CONTEXT ---
-        def reorder_documents(docs):
-            if not docs:
-                return ""
-            reordered_docs = []
-            if len(docs) > 1:
-                reordered_docs.append(docs[0])
-                reordered_docs.extend(docs[2:])
-                reordered_docs.append(docs[1]) 
-            else:
-                reordered_docs = docs
-            return "\n\n---\n\n".join([doc.page_content for doc in reordered_docs])
-
-        # --- XÂY DỰNG QA CHAIN BẰNG LCEL ---
-        _, chain_type_kwargs = get_llm_and_prompt(ollama_model_name)
-        rag_prompt = chain_type_kwargs["prompt"]
-        
-        rag_chain = (
-            {
-                "context": retriever | RunnableLambda(reorder_documents),
-                "question": RunnablePassthrough()
-            }
-            | rag_prompt
-            | llm
-            | StrOutputParser()
-        )
-        
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
-            message_placeholder.markdown("Bot đang tìm kiếm, sắp xếp và suy luận...")
+            message_placeholder.markdown("Bot đang suy nghĩ...")
+
+            # --- ĐỊNH NGHĨA HÀM SẮP XẾP LẠI CONTEXT ---
+            def reorder_documents(docs):
+                if not docs:
+                    return ""
+                reordered_docs = []
+                if len(docs) > 1:
+                    reordered_docs.append(docs[0])
+                    reordered_docs.extend(docs[2:])
+                    reordered_docs.append(docs[1]) 
+                else:
+                    reordered_docs = docs
+                return "\n\n---\n\n".join([doc.page_content for doc in reordered_docs])
+
+            # --- XÂY DỰNG QA CHAIN BẰNG LCEL ---
+            rag_prompt = chain_type_kwargs["prompt"]
+            
+            rag_chain = (
+                {
+                    "context": retriever | RunnableLambda(reorder_documents),
+                    "question": RunnablePassthrough()
+                }
+                | rag_prompt
+                | llm
+                | StrOutputParser()
+            )
+
+
             try:
                 source_documents = retriever.invoke(prompt)
                 answer = rag_chain.invoke(prompt)
                 message_placeholder.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer, "sources": source_documents})
-
+                # st.session_state.messages.append({"role": "assistant", "content": answer, "sources": source_documents})
                 if source_documents:
                     with st.expander("Xem nguồn tham khảo cho câu trả lời này"):
                         for i, source in enumerate(source_documents):
                             st.caption(f"Nguồn {i+1} (Từ: {source.metadata.get('source', 'N/A')})")
                             st.markdown(source.page_content.replace("\n", " "))
+            
+                st.session_state.messages.append({"role": "assistant", "content": answer, "sources": source_documents})
 
             except Exception as e:
                 error_message = f"Đã xảy ra lỗi: {e}"
