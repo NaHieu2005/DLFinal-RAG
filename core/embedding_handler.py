@@ -96,7 +96,7 @@ def save_retriever_config(retriever, vs_id):
         # Lưu cấu hình thay vì đối tượng
         config = {
             "type": type(retriever).__name__,
-            "search_kwargs": {"k": 5},  # Các tham số cơ bản
+            "search_kwargs": {"k": 10},  # Các tham số cơ bản
             "child_ids_key": "parent_id" if hasattr(retriever, "child_ids_key") else None,
             "vs_id": vs_id
         }
@@ -152,7 +152,7 @@ def load_retriever_from_config(vs_id, embedding_model_instance):
                         vectorstore=vectorstore,
                         docstore=docstore,
                         child_splitter=child_splitter,
-                        search_kwargs=config.get("search_kwargs", {"k": 5}),
+                        search_kwargs=config.get("search_kwargs", {"k": 10}),
                         child_ids_key=config.get("child_ids_key", "parent_id")
                     )
                     print(f"[embedding_handler] Đã tạo lại retriever từ cấu hình")
@@ -161,7 +161,7 @@ def load_retriever_from_config(vs_id, embedding_model_instance):
                     print(f"[embedding_handler] Lỗi khi tạo lại ParentDocumentRetriever: {e}")
             
             # Fallback: trả về retriever đơn giản
-            return vectorstore.as_retriever(search_kwargs=config.get("search_kwargs", {"k": 5}))
+            return vectorstore.as_retriever(search_kwargs=config.get("search_kwargs", {"k": 10}))
             
         except Exception as e:
             print(f"[embedding_handler] Lỗi khi tải cấu hình retriever từ '{config_path}': {e}")
@@ -200,7 +200,7 @@ def create_advanced_retriever(parent_chunks, child_chunks, embedding_model_insta
     
     # Khởi tạo FAISS vector store cho child chunks
     vectorstore = FAISS.from_documents(child_chunks, embedding_model_instance)
-    faiss_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    faiss_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     
     # Hybrid retriever kết hợp BM25 và FAISS với trọng số ngang nhau
     ensemble_retriever = EnsembleRetriever(
@@ -219,7 +219,7 @@ def create_advanced_retriever(parent_chunks, child_chunks, embedding_model_insta
         vectorstore=vectorstore,  # Sử dụng vectorstore cho child chunks
         docstore=docstore,  # Lưu trữ parent chunks
         child_splitter=child_splitter,  # Bắt buộc phải có
-        search_kwargs={"k": 5},
+        search_kwargs={"k": 10},
         child_ids_key="parent_id"  # Khóa liên kết giữa child và parent
     )
     
@@ -257,7 +257,7 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     if not parent_chunks:
         print(f"[embedding_handler] Không thể tải parent chunks cho session: {vs_id}")
         print(f"[embedding_handler] Sẽ sử dụng retriever đơn giản thay thế.")
-        return vectorstore.as_retriever(search_kwargs={"k": 5})
+        return vectorstore.as_retriever(search_kwargs={"k": 10})
     
     # Khởi tạo docstore và điền parent documents
     docstore = InMemoryStore()
@@ -277,7 +277,7 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
             vectorstore=vectorstore,
             docstore=docstore,
             child_splitter=child_splitter,
-            search_kwargs={"k": 5},
+            search_kwargs={"k": 10},
             child_ids_key="parent_id"
         )
         print(f"[embedding_handler] Đã tái tạo thành công ParentDocumentRetriever với {len(parent_chunks)} parent chunks")
@@ -289,7 +289,7 @@ def recreate_retriever_from_saved(vs_id, embedding_model_instance):
     except Exception as e:
         print(f"[embedding_handler] Lỗi khi tái tạo ParentDocumentRetriever: {e}")
         print(f"[embedding_handler] Sẽ sử dụng retriever đơn giản thay thế.")
-        return vectorstore.as_retriever(search_kwargs={"k": 5})
+        return vectorstore.as_retriever(search_kwargs={"k": 10})
 
 def get_or_create_vector_store(p_session_id, documents_info, embedding_model_instance, save=True):
     """

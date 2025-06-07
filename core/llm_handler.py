@@ -34,7 +34,7 @@ def get_reranker():
         return CohereRerank(
             cohere_api_key=COHERE_API_KEY,
             model="rerank-multilingual-v3.0",
-            top_n=3  # Chỉ giữ 3 kết quả tốt nhất
+            top_n=5 # Chỉ giữ n kết quả tốt nhất
         )
     except Exception as e:
         print(f"[llm_handler] Lỗi khi khởi tạo Cohere Reranker: {e}")
@@ -88,12 +88,13 @@ Bạn là một trợ lý AI chuyên nghiệp, chỉ được phép trả lời 
 2. Tìm kiếm, xác định và trích xuất các đoạn, câu, dữ kiện hoặc ý liên quan trực tiếp đến câu hỏi trong tài liệu.
 3. Đối chiếu, tổng hợp, phân tích các thông tin liên quan này để tạo thành một câu trả lời ngắn gọn, rõ ràng, đúng trọng tâm, có thể so sánh hoặc làm rõ nếu cần thiết.
 4. Nếu có nhiều nguồn hoặc ý trong tài liệu, hãy tổng hợp, so sánh, hoặc làm rõ các điểm khác biệt hoặc bổ sung lẫn nhau.
-5. Nếu không có thông tin phù hợp, trả lời đúng: "Thông tin này không có trong tài liệu được cung cấp." (không thêm thắt gì khác).
+5. Nếu không có thông tin phù hợp và không thể đưa ra câu trả lời, trả lời đúng: "Thông tin này không có trong tài liệu được cung cấp." (không thêm thắt gì khác).
 6. Luôn trả lời bằng tiếng Việt.
+7. Cố gắng đưa ra câu trả lời liên quan mặc dù có thể không đầy đủ.
 
 **Yêu cầu nghiêm ngặt:**
 - Chỉ sử dụng thông tin có trong "Thông tin tham khảo".
-- Không được bịa, không được tự chế, không được tự tạo ví dụ, không được tự đưa ra nhận định ngoài tài liệu, không được trả lời dựa trên kiến thức nền, không nói lan man.
+- Không được bịa, không được tự chế, không được tự tạo ví dụ, không được tự đưa ra nhận định ngoài tài liệu, không nói lan man.
 - Không được nói lại yêu cầu, không được nói lại câu hỏi, không được nói lại nội dung tài liệu.
 - Trả lời ngắn gọn, đúng trọng tâm, không giải thích lan man, không thêm thắt.
 
