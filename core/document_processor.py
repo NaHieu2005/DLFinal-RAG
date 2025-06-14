@@ -20,7 +20,6 @@ def process_uploaded_files(uploaded_files):
     else:
         print(f"[document_processor] Số lượng file được tải lên: {len(uploaded_files)}")
 
-    # Kiểm tra tính hợp lệ của uploaded_files
     for i, uploaded_file in enumerate(uploaded_files):
         if uploaded_file is None:
             print(f"[document_processor] Warning: File #{i} là None")
@@ -65,9 +64,7 @@ def process_uploaded_files(uploaded_files):
     if not raw_docs_with_source:
         print("[document_processor] Không có văn bản nào được trích xuất.")
         return None, None
-        
-    # --- LOGIC CỦA PARENT DOCUMENT ---
-    # 1. Chia thành các parent chunks
+    
     parent_splitter = RecursiveCharacterTextSplitter(
         chunk_size=PARENT_CHUNK_SIZE, 
         chunk_overlap=PARENT_CHUNK_OVERLAP
@@ -75,13 +72,11 @@ def process_uploaded_files(uploaded_files):
     parent_chunks = parent_splitter.split_documents(raw_docs_with_source)
     print(f"[document_processor] Đã chia thành {len(parent_chunks)} parent chunks.")
 
-    # 2. Gán ID duy nhất cho mỗi parent chunk để liên kết
     id_key = "parent_id"
     for i, p_chunk in enumerate(parent_chunks):
         p_chunk.metadata[id_key] = str(uuid.uuid4())
-        p_chunk.metadata["chunk_id"] = i  # Thêm chunk_id để giữ khả năng tương thích với code cũ
+        p_chunk.metadata["chunk_id"] = i
 
-    # 3. Chia parent chunks thành các child chunks
     child_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHILD_CHUNK_SIZE, 
         chunk_overlap=CHILD_CHUNK_OVERLAP
@@ -89,19 +84,15 @@ def process_uploaded_files(uploaded_files):
     
     child_chunks = []
     for p_chunk in parent_chunks:
-        # Tách nội dung của parent chunk
         _child_docs_content = child_splitter.split_text(p_chunk.page_content)
         
-        # Gán metadata và tạo Document cho child chunk
         for j, _child_content in enumerate(_child_docs_content):
             child_metadata = p_chunk.metadata.copy()
-            child_metadata["child_chunk_id"] = j  # ID riêng cho child để phân biệt
+            child_metadata["child_chunk_id"] = j
             child_doc = Document(page_content=_child_content, metadata=child_metadata)
             child_chunks.append(child_doc)
 
     print(f"[document_processor] Đã chia thành {len(child_chunks)} child chunks.")
     
-    # Hàm giờ trả về parent và child chunks
     return parent_chunks, child_chunks
 
-# (Code for process_uploaded_files will go here) 
