@@ -4,6 +4,8 @@ Hệ thống RAG (Retrieval Augmented Generation) nâng cao cho tài liệu Ti�
 
 Dự án này là thành quả của nhóm trong bài tập lớn môn Deep Learning (2425II_AIT3001*_1). Nhóm xin gửi lời cảm ơn chân thành đến thầy Triệu Hải Long đã tận tình hướng dẫn, đồng hành với chúng em trong suốt quá trình thực hiện dự án.
 
+Demo trên Huggingface: https://huggingface.co/spaces/darkjeanne/RatAoGiac-VietnameseRAG
+
 Thành viên nhóm:
 
 Lê Vũ Hiếu - 23020365
